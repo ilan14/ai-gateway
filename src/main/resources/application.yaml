@@ -1,0 +1,13 @@
+spring:
+  application:
+    name: ai-gateway
+
+gateway:
+  default-model: stub   # 默认模型，未配置真实 key 时回退到 stub
+  providers:
+    deepseek:
+      base-url: https://api.deepseek.com
+      api-key: sk-187235844bb041dc80a8a688dbc72ebe
+      models:
+        - deepseek-chat
+        - deepseek-reasoner
