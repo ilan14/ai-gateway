@@ -7,6 +7,8 @@ import com.lava.ai_gateway.provider.ModelProvider;
 import com.lava.ai_gateway.router.ModelRouter;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.io.buffer.DataBuffer;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
@@ -28,6 +30,8 @@ import java.nio.charset.StandardCharsets;
 @RequestMapping("/v1")
 public class ChatController {
 
+    private static final Logger log = LoggerFactory.getLogger(ChatController.class);
+
     private final ModelRouter router;
     private final ObjectMapper objectMapper;
 
@@ -43,6 +47,9 @@ public class ChatController {
     )
     @PostMapping("/chat/completions")
     public Mono<Void> chatCompletions(@RequestBody ChatRequest request, ServerHttpResponse response) {
+        log.info("POST /v1/chat/completions model={}, stream={}, messages={}",
+                request.model(), request.stream(), request.messages().size());
+
         ModelProvider provider = router.route(request.model());
 
         if (Boolean.TRUE.equals(request.stream())) {

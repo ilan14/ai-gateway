@@ -3,6 +3,8 @@ package com.lava.ai_gateway.router;
 import com.lava.ai_gateway.config.GatewayProperties;
 import com.lava.ai_gateway.provider.ModelProvider;
 import com.lava.ai_gateway.provider.StubModelProvider;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Component;
 
 import java.util.List;
@@ -14,6 +16,8 @@ import java.util.List;
 @Component
 public class ModelRouter {
 
+    private static final Logger log = LoggerFactory.getLogger(ModelRouter.class);
+
     private final List<ModelProvider> providers;
     private final String defaultModel;
     private final ModelProvider fallback;
@@ -24,6 +28,8 @@ public class ModelRouter {
         this.providers = providers;
         this.defaultModel = properties.getDefaultModel();
         this.fallback = fallback;
+        log.info("ModelRouter initialized, defaultModel={}, providers={}",
+                defaultModel, providers.stream().map(ModelProvider::name).toList());
     }
 
     public ModelProvider route(String requestModel) {
@@ -31,9 +37,12 @@ public class ModelRouter {
                 ? requestModel
                 : defaultModel;
 
-        return providers.stream()
+        ModelProvider provider = providers.stream()
                 .filter(p -> p.supportsModel(target))
                 .findFirst()
                 .orElse(fallback);
+
+        log.debug("Route → model={}, provider={}", target, provider.name());
+        return provider;
     }
 }

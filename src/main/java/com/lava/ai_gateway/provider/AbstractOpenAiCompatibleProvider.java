@@ -3,6 +3,8 @@ package com.lava.ai_gateway.provider;
 import com.lava.ai_gateway.config.GatewayProperties.ProviderConfig;
 import com.lava.ai_gateway.model.ChatRequest;
 import com.lava.ai_gateway.model.ChatResponse;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.MediaType;
 import org.springframework.web.reactive.function.client.WebClient;
 import reactor.core.publisher.Flux;
@@ -18,6 +20,8 @@ import java.util.List;
  */
 public abstract class AbstractOpenAiCompatibleProvider implements ModelProvider {
 
+    private static final Logger log = LoggerFactory.getLogger(AbstractOpenAiCompatibleProvider.class);
+
     private final WebClient webClient;
     private final List<String> supportedModels;
 
@@ -28,6 +32,7 @@ public abstract class AbstractOpenAiCompatibleProvider implements ModelProvider 
                 .defaultHeader("Authorization", "Bearer " + config.getApiKey())
                 .build();
         this.supportedModels = config.getModels();
+        log.info("Provider [{}] initialized, baseUrl={}, models={}", name(), config.getBaseUrl(), config.getModels());
     }
 
     @Override
@@ -41,6 +46,11 @@ public abstract class AbstractOpenAiCompatibleProvider implements ModelProvider 
      */
     @Override
     public Flux<String> streamChat(ChatRequest request) {
+        log.debug("Stream chat → provider={}, model={}, messages={}",
+                name(), request.model(), request.messages().size());
+
+        // bodyToFlux(String.class) 对 text/event-stream 响应会自动用 ServerSentEventHttpMessageReader
+        // 解析，data: 前缀已被剥掉，直接得到 JSON 内容（或 "[DONE]"），无需再手动过滤
         return webClient.post()
                 .uri("/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
@@ -48,8 +58,9 @@ public abstract class AbstractOpenAiCompatibleProvider implements ModelProvider 
                 .bodyValue(request)
                 .retrieve()
                 .bodyToFlux(String.class)
-                .filter(line -> line.startsWith("data:"))
-                .map(line -> line.substring("data:".length()).trim());
+//                .doOnNext(chunk -> log.debug("Stream chunk → provider={}, data={}", name(), chunk))
+                .doOnComplete(() -> log.debug("Stream completed → provider={}, model={}", name(), request.model()))
+                .doOnError(e -> log.error("Stream error → provider={}, model={}, error={}", name(), request.model(), e.getMessage()));
     }
 
     /**
@@ -57,11 +68,16 @@ public abstract class AbstractOpenAiCompatibleProvider implements ModelProvider 
      */
     @Override
     public Mono<ChatResponse> chat(ChatRequest request) {
+        log.debug("Chat → provider={}, model={}, messages={}", name(), request.model(), request.messages().size());
+
         return webClient.post()
                 .uri("/chat/completions")
                 .contentType(MediaType.APPLICATION_JSON)
                 .bodyValue(request)
                 .retrieve()
-                .bodyToMono(ChatResponse.class);
+                .bodyToMono(ChatResponse.class)
+                .doOnSuccess(r -> log.debug("Chat completed → provider={}, model={}, id={}", name(),
+                        request.model(), r.id()))
+                .doOnError(e -> log.error("Chat error → provider={}, model={}, error={}", name(), request.model(), e.getMessage()));
     }
 }
