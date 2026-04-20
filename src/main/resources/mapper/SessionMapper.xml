@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE mapper PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "http://mybatis.org/dtd/mybatis-3-mapper.dtd">
+
+<mapper namespace="com.lava.ai_gateway.mapper.SessionMapper">
+
+    <insert id="insert" parameterType="com.lava.ai_gateway.entity.SessionEntity" useGeneratedKeys="true"
+            keyProperty="id">
+        INSERT INTO sessions (session_id, title, model)
+        VALUES (#{sessionId}, #{title}, #{model})
+    </insert>
+
+    <select id="findBySessionId" resultType="com.lava.ai_gateway.entity.SessionEntity">
+        SELECT id, session_id, title, model, created_at, updated_at
+        FROM sessions
+        WHERE session_id = #{sessionId}
+    </select>
+
+    <select id="listAll" resultType="com.lava.ai_gateway.entity.SessionEntity">
+        SELECT id, session_id, title, model, created_at, updated_at
+        FROM sessions
+        ORDER BY updated_at DESC
+    </select>
+
+    <update id="updateTitle">
+        UPDATE sessions
+        SET title = #{title}, updated_at = NOW()
+        WHERE session_id = #{sessionId}
+    </update>
+
+    <delete id="deleteBySessionId">
+        DELETE FROM sessions WHERE session_id = #{sessionId}
+    </delete>
+
+    <update id="touchUpdatedAt">
+        UPDATE sessions SET updated_at = NOW() WHERE session_id = #{sessionId}
+    </update>
+
+</mapper>
