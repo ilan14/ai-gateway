@@ -227,12 +227,7 @@
 
   <label for="modelSelect">模型</label>
   <select id="modelSelect">
-    <option value="deepseek-chat">deepseek-chat</option>
-    <option value="deepseek-reasoner">deepseek-reasoner</option>
-    <option value="qwen-turbo">qwen-turbo</option>
-    <option value="qwen-plus">qwen-plus</option>
-    <option value="qwen-max">qwen-max</option>
-    <option value="stub">stub（本地桩）</option>
+    <option value="">加载中…</option>
   </select>
 
   <div class="switch-wrap">
@@ -264,6 +259,25 @@
   const modelSelect = document.getElementById('modelSelect');
   const streamToggle= document.getElementById('streamToggle');
   const emptyHint   = document.getElementById('emptyHint');
+
+  // 从 /v1/models 加载模型列表
+  (async () => {
+    try {
+      const res = await fetch('/v1/models');
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const models = data.data ?? [];
+      modelSelect.innerHTML = '';
+      models.forEach(m => {
+        const opt = document.createElement('option');
+        opt.value = m.id;
+        opt.textContent = m.owned_by ? `${m.id}（${m.owned_by}）` : m.id;
+        modelSelect.appendChild(opt);
+      });
+    } catch (err) {
+      modelSelect.innerHTML = `<option value="">加载失败: ${err.message}</option>`;
+    }
+  })();
 
   // 对话历史（传给后端）
   let history = [];
