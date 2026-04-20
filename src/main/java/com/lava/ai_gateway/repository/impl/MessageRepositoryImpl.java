@@ -1,10 +1,10 @@
 package com.lava.ai_gateway.repository.impl;
 
-import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 import com.lava.ai_gateway.entity.MessageEntity;
 import com.lava.ai_gateway.mapper.MessageMapper;
 import com.lava.ai_gateway.repository.MessageRepository;
-import com.lava.ai_gateway.utils.JsonUtils;
+import com.lava.ai_gateway.common.JsonCodec;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
@@ -21,12 +21,14 @@ public class MessageRepositoryImpl implements MessageRepository {
 
     private final MessageMapper messageMapper;
     private final StringRedisTemplate redis;
+    private final JsonCodec jsonCodec;
 
     public MessageRepositoryImpl(MessageMapper messageMapper,
                                  StringRedisTemplate redis,
-                                 ObjectMapper objectMapper) {
+                                 JsonCodec jsonCodec) {
         this.messageMapper = messageMapper;
         this.redis = redis;
+        this.jsonCodec = jsonCodec;
     }
 
     @Override
@@ -36,12 +38,12 @@ public class MessageRepositoryImpl implements MessageRepository {
 
         if (cached != null) {
             log.debug("Cache hit → sessionId={}", sessionId);
-            return JsonUtils.deserialize(cached);
+            return jsonCodec.deserialize(cached, new TypeReference<List<MessageEntity>>() {});
         }
 
         log.debug("Cache miss → sessionId={}, loading from MySQL", sessionId);
         List<MessageEntity> messages = messageMapper.findBySessionId(sessionId);
-        redis.opsForValue().set(key, JsonUtils.serialize(messages), CACHE_TTL);
+        redis.opsForValue().set(key, jsonCodec.serialize(messages), CACHE_TTL);
         return messages;
     }
 
