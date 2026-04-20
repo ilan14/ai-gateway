@@ -32,3 +32,11 @@ gateway:
       models:
         - deepseek-chat
         - deepseek-reasoner
+    qwen:
+      base-url: https://dashscope.aliyuncs.com/compatible-mode/v1
+      api-key: ${QWEN_API_KEY}
+      models:
+        - qwen-flash
+        - qwen-plus
+        - qwen-max
+
