@@ -1,13 +1,13 @@
 package com.lava.ai_gateway.repository.impl;
 
-import com.fasterxml.jackson.core.type.TypeReference;
+import com.lava.ai_gateway.common.JsonCodec;
 import com.lava.ai_gateway.entity.MessageEntity;
 import com.lava.ai_gateway.mapper.MessageMapper;
 import com.lava.ai_gateway.repository.MessageRepository;
-import com.lava.ai_gateway.common.JsonCodec;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.stereotype.Repository;
+import tools.jackson.core.type.TypeReference;
 
 import java.time.Duration;
 import java.util.List;
@@ -38,7 +38,8 @@ public class MessageRepositoryImpl implements MessageRepository {
 
         if (cached != null) {
             log.debug("Cache hit → sessionId={}", sessionId);
-            return jsonCodec.deserialize(cached, new TypeReference<List<MessageEntity>>() {});
+            return jsonCodec.deserialize(cached, new TypeReference<List<MessageEntity>>() {
+            });
         }
 
         log.debug("Cache miss → sessionId={}, loading from MySQL", sessionId);
