@@ -1,7 +1,5 @@
 package com.lava.ai_gateway.controller;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import com.lava.ai_gateway.model.ChatRequest;
 import com.lava.ai_gateway.model.Message;
 import com.lava.ai_gateway.provider.ModelProvider;
@@ -18,6 +16,8 @@ import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.core.JacksonException;
+import tools.jackson.databind.ObjectMapper;
 
 import java.nio.charset.StandardCharsets;
 import java.util.UUID;
@@ -120,7 +120,7 @@ public class ChatController {
                         byte[] bytes = objectMapper.writeValueAsBytes(resp);
                         DataBuffer buffer = response.bufferFactory().wrap(bytes);
                         return response.writeWith(Mono.just(buffer));
-                    } catch (JsonProcessingException e) {
+                    } catch (JacksonException e) {
                         return Mono.error(e);
                     }
                 });

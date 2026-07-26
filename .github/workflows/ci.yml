@@ -1,0 +1,48 @@
+name: ai-gateway CI
+
+on:
+  push:
+
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: maven-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Maven Verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Java 25
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "25"
+          cache: maven
+
+      - name: Make Maven Wrapper executable
+        run: chmod +x mvnw
+
+      - name: Run Maven verification
+        run: ./mvnw --batch-mode --no-transfer-progress clean verify
+
+  notify:
+    name: Telegram Notification
+    needs: test
+    if: always()
+    uses: ilan14/github-actions-workflows/.github/workflows/telegram-notify.yml@v1
+    with:
+      status: ${{ needs.test.result }}
+      job_name: "Complete CI Pipeline"
+    secrets:
+      telegram_bot_token: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+      telegram_chat_id: ${{ secrets.TELEGRAM_CHAT_ID }}

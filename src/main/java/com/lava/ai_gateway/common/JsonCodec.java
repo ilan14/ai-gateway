@@ -1,8 +1,8 @@
 package com.lava.ai_gateway.common;
 
-import com.fasterxml.jackson.core.JsonProcessingException;
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.JacksonException;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import com.lava.ai_gateway.exception.ServerException;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
@@ -22,7 +22,7 @@ public class JsonCodec {
     public String serialize(Object object) {
         try {
             return objectMapper.writeValueAsString(object);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             log.error("serialize error, obj:{}", object);
             throw new ServerException(e);
         }
@@ -31,7 +31,7 @@ public class JsonCodec {
     public <T> T deserialize(String str, Class<T> clazz) {
         try {
             return objectMapper.readValue(str, clazz);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             log.error("deserialize error, str:{}, className:{}", str, clazz.getSimpleName());
             throw new ServerException(e);
         }
@@ -40,7 +40,7 @@ public class JsonCodec {
     public <T> T deserialize(String str, TypeReference<T> typeReference) {
         try {
             return objectMapper.readValue(str, typeReference);
-        } catch (JsonProcessingException e) {
+        } catch (JacksonException e) {
             log.error("deserialize error, str:{}, className:{}", str, typeReference.getClass().getSimpleName());
             throw new ServerException(e);
         }

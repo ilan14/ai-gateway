@@ -4,18 +4,21 @@ import com.lava.ai_gateway.entity.SessionEntity;
 import org.junit.jupiter.api.Test;
 import org.mybatis.spring.boot.test.autoconfigure.MybatisTest;
 import org.springframework.beans.factory.annotation.Autowired;
-import org.springframework.boot.test.autoconfigure.jdbc.AutoConfigureTestDatabase;
+import org.springframework.boot.jdbc.test.autoconfigure.AutoConfigureTestDatabase;
+import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.context.jdbc.Sql;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 /**
  * SessionMapper 单测，使用 H2 内存数据库。
+ *
  * @MybatisTest 只加载 MyBatis 相关 Bean，不启动完整 Spring 上下文。
  * @Transactional（@MybatisTest 默认开启）每个测试方法结束后自动回滚，保证测试隔离。
  */
 @MybatisTest
-@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.ANY)
+@ActiveProfiles("mapper-test")
+@AutoConfigureTestDatabase(replace = AutoConfigureTestDatabase.Replace.NONE)
 @Sql("/test-schema.sql")
 class SessionMapperTest {
 
