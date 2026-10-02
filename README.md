@@ -1,5 +1,28 @@
 # AI Gateway
 
+## JVM 指标与 Prometheus
+
+应用通过 Actuator 和 Micrometer 自动采集 JVM 内存、GC、线程、类加载，以及进程 CPU 和运行时间等指标。监控接口与业务接口共用端口（默认 8080），地址为 `/actuator/prometheus`，指标带有 `application="ai-gateway"` 标签。
+
+```sh
+curl http://localhost:8080/actuator/prometheus
+```
+
+同机运行的 Prometheus 可在现有配置中增加以下抓取任务，再重新加载配置：
+
+```yaml
+scrape_configs:
+  - job_name: ai-gateway
+    scrape_interval: 15s
+    metrics_path: /actuator/prometheus
+    static_configs:
+      - targets: ['localhost:8080']
+```
+
+如果 Prometheus 在 Docker 容器内运行，`localhost` 指向其自身容器，应改用可访问应用的宿主机地址（Linux 使用 `host.docker.internal` 时需为 Prometheus 容器配置 `host-gateway` 映射）。本项目不修改已部署的 Prometheus。
+
+可查询 `jvm_memory_used_bytes`、`jvm_threads_live_threads`、`jvm_classes_loaded_classes` 和 `process_cpu_usage` 等指标；部分 GC 指标需发生回收后才会出现。Actuator HTTP 端点只暴露 `health` 和 `prometheus`，指标接口没有认证，应通过现有网络或反向代理配置限制访问。
+
 ## 本地一键测试、打包和启动
 
 安装 JDK 25 后，在项目根目录执行：
