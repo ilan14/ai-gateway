@@ -8,7 +8,14 @@
 ./start.sh
 ```
 
-脚本使用 Maven Wrapper 和本地 Maven 缓存，执行 `clean package`，包含单元测试；测试或打包失败时不会启动应用。成功后以前台方式运行 jar，Ctrl+C 停止。
+脚本使用 Maven Wrapper 和本地 Maven 缓存，执行 `clean package`，包含单元测试；测试或打包失败时不会启动应用。打包成功后使用 `nohup` 后台运行 Java，脚本返回后可以退出终端或 SSH。Java 启动及运行日志追加保存到 `logs/start.log`，PID 保存到 `logs/app.pid`；测试和打包输出仍显示在终端。后台进程创建不代表应用已就绪，应查看日志确认启动结果。
+
+```sh
+tail -f logs/start.log
+kill "$(cat logs/app.pid)"
+```
+
+查看日志时 Ctrl+C 只退出日志查看。重新运行脚本前请先停止旧应用；脚本不会自动停止已有进程。`nohup` 不提供崩溃重启或开机启动。
 
 JVM 参数 `JVM_ARGS`、端口 `SERVER_PORT`、应用参数 `APP_ARGS` 和 Maven 参数 `MAVEN_ARGS` 集中声明在 `start.sh` 顶部，可直接修改。默认 JVM 堆内存为 256–512 MB，端口为 8080。依赖完整时可设置 `MAVEN_ARGS=("-o")` 离线构建；修改 Java 版本路径可设置 `JAVA_HOME`。
 
