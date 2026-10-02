@@ -34,3 +34,8 @@ build/
 
 
 logs/
+
+# Local Docker configuration and secrets
+.env
+.env.*
+!.env.example
