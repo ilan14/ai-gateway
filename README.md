@@ -1,5 +1,24 @@
 # AI Gateway
 
+## 本地一键测试、打包和启动
+
+安装 JDK 25 后，在项目根目录执行：
+
+```sh
+./start.sh
+```
+
+脚本使用 Maven Wrapper 和本地 Maven 缓存，执行 `clean package`，包含单元测试；测试或打包失败时不会启动应用。成功后以前台方式运行 jar，Ctrl+C 停止。
+
+JVM 参数 `JVM_ARGS`、端口 `SERVER_PORT`、应用参数 `APP_ARGS` 和 Maven 参数 `MAVEN_ARGS` 集中声明在 `start.sh` 顶部，可直接修改。默认 JVM 堆内存为 256–512 MB，端口为 8080。依赖完整时可设置 `MAVEN_ARGS=("-o")` 离线构建；修改 Java 版本路径可设置 `JAVA_HOME`。
+
+MySQL、Redis 和模型密钥使用 `application.yaml` 中的环境变量配置。脚本会在打包前自动加载项目根目录的 `.env`，并导出其中的变量供 Maven 和 Java 使用；文件不存在时继续运行。`.env` 使用 Bash 赋值语法（例如 `DB_PASSWORD='含空格的密码'`），其中的赋值会覆盖同名环境变量。也可以直接通过环境变量传入未在 `.env` 中设置的配置：
+
+```sh
+DB_URL=localhost DB_USERNAME=root DB_PASSWORD=your-password \
+  REDIS_HOST=localhost ./start.sh
+```
+
 ## 使用 Docker 运行
 
 需要 Docker Engine / Docker Desktop 和 Docker Compose v2。构建在容器内完成，无需本机安装 Java 或 Maven。
