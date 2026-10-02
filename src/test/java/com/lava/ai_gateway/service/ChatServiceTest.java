@@ -33,14 +33,14 @@ class ChatServiceTest {
         ChatResponse response = new ChatResponse("id", "chat.completion", 0, "stub",
                 List.of(new Choice(0, new Message("assistant", "reply"), "stop")), null);
         when(provider.chat(request)).thenAnswer(invocation -> {
-            verify(sessions).getOrCreate("session", "stub");
-            verify(sessions).appendUserMessage("session", "latest");
+            verify(sessions).getOrCreate("8d404d66-22d4-45ea-a3b1-83a2b3a695a9", "stub");
+            verify(sessions).appendUserMessage("8d404d66-22d4-45ea-a3b1-83a2b3a695a9", "latest");
             return Mono.just(response);
         });
 
-        assertThat(service.chat(request, "session").block(Duration.ofSeconds(5))).isSameAs(response);
-        verify(sessions, timeout(2000)).appendAssistantMessage("session", "reply");
-        verify(sessions, never()).appendUserMessage("session", "old");
+        assertThat(service.chat(request, "8d404d66-22d4-45ea-a3b1-83a2b3a695a9").block(Duration.ofSeconds(5))).isSameAs(response);
+        verify(sessions, timeout(2000)).appendAssistantMessage("8d404d66-22d4-45ea-a3b1-83a2b3a695a9", "reply");
+        verify(sessions, never()).appendUserMessage("8d404d66-22d4-45ea-a3b1-83a2b3a695a9", "old");
     }
 
     @Test
@@ -62,9 +62,9 @@ class ChatServiceTest {
     @Test
     void persistenceFailurePreventsProviderCall() {
         doThrow(new IllegalStateException("database unavailable"))
-                .when(sessions).appendUserMessage("session", "latest");
+                .when(sessions).appendUserMessage("8d404d66-22d4-45ea-a3b1-83a2b3a695a9", "latest");
 
-        assertThatThrownBy(() -> service.chat(request(false), "session").block(Duration.ofSeconds(5)))
+        assertThatThrownBy(() -> service.chat(request(false), "8d404d66-22d4-45ea-a3b1-83a2b3a695a9").block(Duration.ofSeconds(5)))
                 .isInstanceOf(IllegalStateException.class).hasMessage("database unavailable");
         verifyNoInteractions(provider);
         verify(sessions, never()).appendAssistantMessage(anyString(), anyString());
@@ -77,10 +77,35 @@ class ChatServiceTest {
                 Flux.just("{\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}"),
                 Flux.error(new IllegalStateException("upstream failed"))));
 
-        assertThatThrownBy(() -> service.streamChat(request, "session")
+        assertThatThrownBy(() -> service.streamChat(request, "8d404d66-22d4-45ea-a3b1-83a2b3a695a9")
                 .collectList().block(Duration.ofSeconds(5)))
                 .isInstanceOf(IllegalStateException.class).hasMessage("upstream failed");
         verify(sessions, never()).appendAssistantMessage(anyString(), anyString());
+    }
+
+    @Test
+    void prepareGeneratesIdWhenAbsent() {
+        String id = service.prepareSessionId(null).block(Duration.ofSeconds(5));
+        assertThat(java.util.UUID.fromString(id).toString()).isEqualTo(id);
+        verifyNoInteractions(sessions);
+    }
+
+    @Test
+    void prepareChecksExistingSession() {
+        String id = "8d404d66-22d4-45ea-a3b1-83a2b3a695a9";
+        assertThat(service.prepareSessionId(id).block(Duration.ofSeconds(5))).isEqualTo(id);
+        verify(sessions).requireSession(id);
+    }
+
+    @Test
+    void prepareRejectsMalformedAndShortenedUuids() {
+        for (String id : List.of("invalid", "1-1-1-1-1", " 8d404d66-22d4-45ea-a3b1-83a2b3a695a9")) {
+            assertThatThrownBy(() -> service.prepareSessionId(id).block(Duration.ofSeconds(5)))
+                    .isInstanceOf(org.springframework.web.server.ResponseStatusException.class)
+                    .satisfies(error -> assertThat(((org.springframework.web.server.ResponseStatusException) error)
+                            .getStatusCode().value()).isEqualTo(400));
+        }
+        verifyNoInteractions(sessions, provider);
     }
 
     private ChatRequest request(boolean stream) {

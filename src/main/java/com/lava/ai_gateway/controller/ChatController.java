@@ -37,7 +37,7 @@ public class ChatController {
     @Operation(
             summary = "Chat Completions",
             description = "支持流式（stream=true）和非流式两种模式。" +
-                    "可通过 X-Session-Id 请求头关联会话，网关自动持久化对话历史。"
+                    "可通过 X-Session-Id 请求头关联会话，网关自动持久化对话历史。响应头 X-Session-Id 返回会话 ID；非法 UUID 返回 400，会话不存在返回 404。"
     )
     @PostMapping("/chat/completions")
     public Mono<Void> chatCompletions(
@@ -45,16 +45,23 @@ public class ChatController {
             ServerHttpResponse response,
             @RequestHeader(value = "X-Session-Id", required = false) String rawSessionId) {
 
+        return chatService.prepareSessionId(rawSessionId).flatMap(sessionId -> {
+            response.getHeaders().set("X-Session-Id", sessionId);
+            return writeResponse(request, response, sessionId);
+        });
+    }
+
+    private Mono<Void> writeResponse(ChatRequest request, ServerHttpResponse response, String sessionId) {
         if (Boolean.TRUE.equals(request.stream())) {
             response.getHeaders().setContentType(MediaType.TEXT_EVENT_STREAM);
-            Flux<DataBuffer> body = chatService.streamChat(request, rawSessionId)
+            Flux<DataBuffer> body = chatService.streamChat(request, sessionId)
                     .map(chunk -> "data: " + chunk + "\n\n")
                     .map(chunk -> response.bufferFactory().wrap(chunk.getBytes(StandardCharsets.UTF_8)));
             return response.writeWith(body);
         }
 
         response.getHeaders().setContentType(MediaType.APPLICATION_JSON);
-        return chatService.chat(request, rawSessionId)
+        return chatService.chat(request, sessionId)
                 .flatMap(resp -> {
                     try {
                         byte[] bytes = objectMapper.writeValueAsBytes(resp);

@@ -14,6 +14,8 @@ import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 /** 聊天业务编排：模型路由、会话维护和回复持久化。 */
 @Service
@@ -58,9 +60,31 @@ public class ChatService {
         });
     }
 
+    /** 在响应提交前确定会话 ID，数据库查询在阻塞任务线程执行。 */
+    public Mono<String> prepareSessionId(String rawSessionId) {
+        return Mono.fromCallable(() -> {
+            String sessionId = resolveSessionId(rawSessionId);
+            if (rawSessionId != null && !rawSessionId.isBlank()) {
+                sessionService.requireSession(sessionId);
+            }
+            return sessionId;
+        }).subscribeOn(Schedulers.boundedElastic());
+    }
+
     private String resolveSessionId(String rawSessionId) {
-        return rawSessionId != null && !rawSessionId.isBlank()
-                ? rawSessionId : UUID.randomUUID().toString();
+        if (rawSessionId == null || rawSessionId.isBlank()) {
+            return UUID.randomUUID().toString();
+        }
+        try {
+            String canonical = UUID.fromString(rawSessionId).toString();
+            if (!canonical.equals(rawSessionId)) {
+                throw new IllegalArgumentException("Non-canonical UUID");
+            }
+            return canonical;
+        } catch (IllegalArgumentException e) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "X-Session-Id must be a canonical UUID");
+        }
     }
 
     private Mono<Void> saveUser(ChatRequest request, String sessionId) {

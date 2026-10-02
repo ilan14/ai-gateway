@@ -11,6 +11,9 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
+
 import java.util.List;
 import java.util.Optional;
 
@@ -28,6 +31,12 @@ public class SessionService {
     }
 
     // ── 对话流程调用 ───────────────────────────────────────────────────────────
+
+    public void requireSession(String sessionId) {
+        if (sessionRepository.findById(sessionId) == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");
+        }
+    }
 
     public SessionEntity getOrCreate(String sessionId, String model) {
         SessionEntity session = sessionRepository.findById(sessionId);
