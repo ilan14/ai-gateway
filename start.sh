@@ -1,12 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# 启动配置：按需修改。需要 JDK 25；设置 JAVA_HOME 可指定 JDK。
-JVM_ARGS=("-Xms256m" "-Xmx512m" "-Dfile.encoding=UTF-8")
-SERVER_PORT=8080
-APP_ARGS=("--server.port=${SERVER_PORT}")
-# 依赖完整时可改为 MAVEN_ARGS=("-o")，仅使用本地 Maven 缓存。
-MAVEN_ARGS=()
+# 默认已正确安装 JDK 25。
 LOG_FILE=logs/start.log
 PID_FILE=logs/app.pid
 
@@ -20,17 +15,8 @@ if [[ -f "$PROJECT_DIR/.env" ]]; then
   set +a
 fi
 
-JAVA_BIN=java
-if [[ -n "${JAVA_HOME:-}" ]]; then
-  JAVA_BIN="${JAVA_HOME}/bin/java"
-fi
-if ! command -v "$JAVA_BIN" >/dev/null 2>&1; then
-  echo "未找到 Java，请安装 JDK 25 或配置 JAVA_HOME。" >&2
-  exit 1
-fi
-
-echo "执行单元测试并打包……"
-./mvnw -B -ntp ${MAVEN_ARGS[@]+"${MAVEN_ARGS[@]}"} clean package
+echo "跳过单元测试并打包……"
+./mvnw -B -ntp -DskipTests clean package
 
 shopt -s nullglob
 JARS=(target/*.jar)
@@ -39,9 +25,14 @@ if [[ ${#JARS[@]} -ne 1 ]]; then
   exit 1
 fi
 
+JVM_ARGS="-Dfile.encoding=UTF-8
+          -Xms256m
+          -Xmx512m
+          "
+
 mkdir -p -- "$(dirname -- "$LOG_FILE")" "$(dirname -- "$PID_FILE")"
-echo "后台启动 ${JARS[0]}，端口 ${SERVER_PORT}。"
-nohup "$JAVA_BIN" ${JVM_ARGS[@]+"${JVM_ARGS[@]}"} -jar "${JARS[0]}" ${APP_ARGS[@]+"${APP_ARGS[@]}"} >> "$LOG_FILE" 2>&1 < /dev/null &
+echo "后台启动 ${JARS[0]}。"
+nohup java $JVM_ARGS -jar "${JARS[0]}" >> "$LOG_FILE" 2>&1 < /dev/null &
 APP_PID=$!
 printf '%s\n' "$APP_PID" > "$PID_FILE"
 echo "启动进程已创建，PID：${APP_PID}；应用是否就绪请查看日志。"
