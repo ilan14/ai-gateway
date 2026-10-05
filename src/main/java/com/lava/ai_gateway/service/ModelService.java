@@ -20,6 +20,7 @@ public class ModelService {
     public ModelListResponse listModels() {
         List<ModelInfo> models = new ArrayList<>();
         models.add(new ModelInfo("stub", "ai-gateway"));
+        models.add(new ModelInfo("mock", "mock"));
 
         gatewayProperties.getProviders().forEach((providerName, config) ->
                 config.getModels().forEach(modelId ->

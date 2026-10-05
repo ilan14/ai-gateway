@@ -37,13 +37,18 @@ public class ChatController {
     @Operation(
             summary = "Chat Completions",
             description = "支持流式（stream=true）和非流式两种模式。" +
-                    "可通过 X-Session-Id 请求头关联会话，网关自动持久化对话历史。响应头 X-Session-Id 返回会话 ID；非法 UUID 返回 400，会话不存在返回 404。"
+                    "可通过 X-Session-Id 请求头关联会话，网关自动持久化对话历史。响应头 X-Session-Id 返回会话 ID；非法 UUID 返回 400，会话不存在返回 404。" +
+                    "model=mock 时绕过会话和存储，忽略 X-Session-Id，也不返回该响应头。"
     )
     @PostMapping("/chat/completions")
     public Mono<Void> chatCompletions(
             @RequestBody ChatRequest request,
             ServerHttpResponse response,
             @RequestHeader(value = "X-Session-Id", required = false) String rawSessionId) {
+
+        if (chatService.isMock(request)) {
+            return writeResponse(request, response, null);
+        }
 
         return chatService.prepareSessionId(rawSessionId).flatMap(sessionId -> {
             response.getHeaders().set("X-Session-Id", sessionId);

@@ -16,6 +16,23 @@ import static org.mockito.Mockito.*;
 
 class ChatControllerTest {
     @Test
+    void mockSkipsSessionPreparationAndDoesNotReturnSessionHeader() {
+        for (boolean stream : List.of(false, true)) {
+            ChatService service = mock(ChatService.class);
+            ChatRequest request = new ChatRequest("mock", List.of(new Message("user", "hello")), stream, null, null);
+            when(service.isMock(request)).thenReturn(true);
+            when(service.streamChat(request, null)).thenReturn(Flux.just("[DONE]"));
+            when(service.chat(request, null)).thenReturn(Mono.just(new ChatResponse("mock-id", "chat.completion",
+                    0, "mock", List.of(), null)));
+            MockServerHttpResponse response = new MockServerHttpResponse();
+            new ChatController(service, new ObjectMapper()).chatCompletions(request, response, "invalid")
+                    .block(Duration.ofSeconds(5));
+            assertThat(response.getHeaders().getFirst("X-Session-Id")).isNull();
+            verify(service, never()).prepareSessionId(any());
+        }
+    }
+
+    @Test
     void returnsSessionHeaderForBothResponseModes() {
         for (boolean stream : List.of(false, true)) {
             ChatService service = mock(ChatService.class);

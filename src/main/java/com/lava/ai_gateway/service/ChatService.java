@@ -7,15 +7,15 @@ import com.lava.ai_gateway.provider.ModelProvider;
 import com.lava.ai_gateway.router.ModelRouter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 import tools.jackson.databind.ObjectMapper;
 
 import java.util.UUID;
-import org.springframework.http.HttpStatus;
-import org.springframework.web.server.ResponseStatusException;
 
 /** 聊天业务编排：模型路由、会话维护和回复持久化。 */
 @Service
@@ -35,6 +35,10 @@ public class ChatService {
 
     public Flux<String> streamChat(ChatRequest request, String rawSessionId) {
         return Flux.defer(() -> {
+            if (isMock(request)) {
+                return router.route("mock").streamChat(request);
+            }
+
             String sessionId = resolveSessionId(rawSessionId);
             ModelProvider provider = router.route(request.model());
             StringBuilder assistantContent = new StringBuilder();
@@ -47,6 +51,10 @@ public class ChatService {
 
     public Mono<ChatResponse> chat(ChatRequest request, String rawSessionId) {
         return Mono.defer(() -> {
+            if (isMock(request)) {
+                return router.route("mock").chat(request);
+            }
+
             String sessionId = resolveSessionId(rawSessionId);
             ModelProvider provider = router.route(request.model());
 
@@ -58,6 +66,10 @@ public class ChatService {
                         saveAssistantAsync(sessionId, content);
                     });
         });
+    }
+
+    public boolean isMock(ChatRequest request) {
+        return "mock".equals(request.model());
     }
 
     /** 在响应提交前确定会话 ID，数据库查询在阻塞任务线程执行。 */

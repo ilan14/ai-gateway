@@ -28,6 +28,19 @@ class ChatServiceTest {
     }
 
     @Test
+    void mockBypassesAllSessionOperationsInBothModes() {
+        ChatRequest request = new ChatRequest("mock", List.of(new Message("user", "hello")), false, null, null);
+        when(router.route("mock")).thenReturn(provider);
+        when(provider.chat(request)).thenReturn(Mono.just(new ChatResponse("mock-id", "chat.completion", 0,
+                "mock", List.of(), null)));
+        when(provider.streamChat(request)).thenReturn(Flux.just("[DONE]"));
+        assertThat(service.chat(request, "invalid-session").block(Duration.ofSeconds(5)).id()).isEqualTo("mock-id");
+        assertThat(service.streamChat(request, "invalid-session").collectList().block(Duration.ofSeconds(5)))
+                .containsExactly("[DONE]");
+        verifyNoInteractions(sessions);
+    }
+
+    @Test
     void chatSavesLastUserBeforeCallingProviderAndSavesReply() {
         ChatRequest request = request(false);
         ChatResponse response = new ChatResponse("id", "chat.completion", 0, "stub",
