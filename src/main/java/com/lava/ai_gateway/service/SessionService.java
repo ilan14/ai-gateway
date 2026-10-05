@@ -5,6 +5,7 @@ import com.lava.ai_gateway.dto.SessionDTO;
 import com.lava.ai_gateway.dto.SessionDetailDTO;
 import com.lava.ai_gateway.entity.MessageEntity;
 import com.lava.ai_gateway.entity.SessionEntity;
+import com.lava.ai_gateway.model.Message;
 import com.lava.ai_gateway.repository.MessageRepository;
 import com.lava.ai_gateway.repository.SessionRepository;
 import lombok.extern.slf4j.Slf4j;
@@ -49,6 +50,12 @@ public class SessionService {
             log.info("Session created → sessionId={}, model={}", sessionId, model);
         }
         return session;
+    }
+
+    public List<Message> loadMessages(String sessionId) {
+        return messageRepository.findBySessionId(sessionId).stream()
+                .map(message -> new Message(message.getRole(), message.getContent()))
+                .toList();
     }
 
     public void appendUserMessage(String sessionId, String content) {

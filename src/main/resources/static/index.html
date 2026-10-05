@@ -260,7 +260,6 @@
   const streamToggle= document.getElementById('streamToggle');
   const emptyHint   = document.getElementById('emptyHint');
 
-  let history = [];
   let sessionId = null;
   let activeRequest = null;
   let modelsReady = false;
@@ -316,7 +315,6 @@
   document.getElementById('clearBtn').addEventListener('click', () => {
     activeRequest?.controller.abort();
     activeRequest = null;
-    history = [];
     sessionId = null;
     messagesEl.replaceChildren(emptyHint);
     updateSendButton();
@@ -354,7 +352,6 @@
     if (!text || !modelsReady || !modelSelect.value || activeRequest) return;
 
     appendMessage('user', text);
-    history.push({ role: 'user', content: text });
     inputEl.value = '';
     inputEl.style.height = 'auto';
 
@@ -371,16 +368,15 @@
       const res = await fetch('/v1/chat/completions', {
         method: 'POST',
         headers,
-        body: JSON.stringify({ model, messages: history, stream }),
+        body: JSON.stringify({ model, messages: [{ role: 'user', content: text }], stream, context_mode: 'server' }),
         signal: request.controller.signal
       });
       if (activeRequest !== request) return;
       if (!res.ok) throw await responseError(res);
       if (model !== 'mock') sessionId = res.headers.get('X-Session-Id') || sessionId;
-      const reply = stream
+      stream
         ? await readStream(res, contentEl)
         : await readNormal(res, contentEl);
-      if (activeRequest === request) history.push({ role: 'assistant', content: reply });
     } catch (err) {
       if (activeRequest !== request) return;
       const errorEl = document.createElement('div');

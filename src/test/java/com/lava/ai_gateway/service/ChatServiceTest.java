@@ -121,6 +121,91 @@ class ChatServiceTest {
         verifyNoInteractions(sessions, provider);
     }
 
+    @Test
+    void serverContextLoadsHistoryBeforeSavingInputInBothModes() {
+        String id = "8d404d66-22d4-45ea-a3b1-83a2b3a695a9";
+        var history = List.of(new Message("user", "old"), new Message("assistant", "previous"));
+        when(sessions.loadMessages(id)).thenAnswer(invocation -> {
+            verify(sessions, never()).appendUserMessage(id, "latest");
+            return history;
+        });
+        for (boolean stream : List.of(false, true)) {
+            clearInvocations(sessions);
+            ChatRequest incoming = new ChatRequest("stub", List.of(new Message("user", "latest")),
+                    stream, 0.5, 100, "server");
+            ChatRequest expected = new ChatRequest("stub", List.of(new Message("user", "old"),
+                    new Message("assistant", "previous"), new Message("user", "latest")), stream, 0.5, 100);
+            when(provider.chat(expected)).thenReturn(Mono.just(new ChatResponse("id", "chat.completion", 0,
+                    "stub", List.of(new Choice(0, new Message("assistant", "reply"), "stop")), null)));
+            when(provider.streamChat(expected)).thenReturn(Flux.just(
+                    "{\"choices\":[{\"delta\":{\"content\":\"reply\"}}]}", "[DONE]"));
+            if (stream) {
+                service.streamChat(incoming, id).doOnNext(chunk -> {
+                    if ("[DONE]".equals(chunk)) verify(sessions).appendAssistantMessage(id, "reply");
+                }).collectList().block(Duration.ofSeconds(5));
+                verify(provider).streamChat(expected);
+            } else {
+                service.chat(incoming, id).block(Duration.ofSeconds(5));
+                verify(provider).chat(expected);
+            }
+            verify(sessions).appendUserMessage(id, "latest");
+            verify(sessions).appendAssistantMessage(id, "reply");
+        }
+    }
+
+    @Test
+    void invalidContextModeAndServerMessagesAreRejectedBeforeStorage() {
+        for (ChatRequest invalid : List.of(
+                new ChatRequest("stub", List.of(new Message("user", "hello")), false, null, null, "invalid"),
+                new ChatRequest("stub", List.of(), false, null, null, "server"),
+                new ChatRequest("stub", List.of(new Message("assistant", "hello")), false, null, null, "server"),
+                new ChatRequest("stub", List.of(new Message("user", " ")), false, null, null, "server"),
+                new ChatRequest("stub", request(false).messages(), false, null, null, "server"))) {
+            assertThatThrownBy(() -> new com.lava.ai_gateway.controller.ChatController(service, new ObjectMapper())
+                    .chatCompletions(invalid, new org.springframework.mock.http.server.reactive.MockServerHttpResponse(), null))
+                    .isInstanceOf(org.springframework.web.server.ResponseStatusException.class);
+        }
+        verifyNoInteractions(sessions, provider);
+    }
+
+    @Test
+    void clientContextDoesNotReadHistoryOrForwardExtension() {
+        ChatRequest incoming = new ChatRequest("stub", request(false).messages(), false, null, null, "client");
+        ChatRequest expected = request(false);
+        when(provider.chat(expected)).thenReturn(Mono.just(new ChatResponse("id", "chat.completion", 0,
+                "stub", List.of(), null)));
+        service.chat(incoming, null).block(Duration.ofSeconds(5));
+        verify(provider).chat(expected);
+        verify(sessions, never()).loadMessages(anyString());
+        assertThat(new ObjectMapper().writeValueAsString(expected)).doesNotContain("context_mode");
+    }
+
+    @Test
+    void incompleteAndErrorStreamsDoNotSaveAssistant() {
+        ChatRequest request = request(true);
+        for (String frame : List.of("{\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}",
+                "{\"error\":{\"message\":\"upstream error\"}}", "invalid")) {
+            when(provider.streamChat(request)).thenReturn(Flux.just(frame));
+            assertThatThrownBy(() -> service.streamChat(request, null).collectList().block(Duration.ofSeconds(5)))
+                    .isInstanceOf(IllegalStateException.class);
+        }
+        verify(sessions, never()).appendAssistantMessage(anyString(), anyString());
+    }
+
+    @Test
+    void assistantPersistenceFailurePreventsDoneFrame() {
+        ChatRequest request = request(true);
+        String id = "8d404d66-22d4-45ea-a3b1-83a2b3a695a9";
+        when(provider.streamChat(request)).thenReturn(Flux.just(
+                "{\"choices\":[{\"delta\":{\"content\":\"reply\"}}]}", "[DONE]"));
+        doThrow(new IllegalStateException("save failed")).when(sessions).appendAssistantMessage(id, "reply");
+        var frames = new java.util.ArrayList<String>();
+        assertThatThrownBy(() -> service.streamChat(request, id).doOnNext(frames::add)
+                .collectList().block(Duration.ofSeconds(5)))
+                .isInstanceOf(IllegalStateException.class).hasMessage("save failed");
+        assertThat(frames).doesNotContain("[DONE]");
+    }
+
     private ChatRequest request(boolean stream) {
         return new ChatRequest("stub", List.of(new Message("user", "old"),
                 new Message("assistant", "previous"), new Message("user", "latest")), stream, null, null);

@@ -5,9 +5,11 @@ import com.lava.ai_gateway.service.ChatService;
 import io.swagger.v3.oas.annotations.Operation;
 import io.swagger.v3.oas.annotations.tags.Tag;
 import org.springframework.core.io.buffer.DataBuffer;
+import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.server.reactive.ServerHttpResponse;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import tools.jackson.core.JacksonException;
@@ -45,6 +47,7 @@ public class ChatController {
             @RequestBody ChatRequest request,
             ServerHttpResponse response,
             @RequestHeader(value = "X-Session-Id", required = false) String rawSessionId) {
+        validateRequest(request);
 
         if (chatService.isMock(request)) {
             return writeResponse(request, response, null);
@@ -54,6 +57,21 @@ public class ChatController {
             response.getHeaders().set("X-Session-Id", sessionId);
             return writeResponse(request, response, sessionId);
         });
+    }
+
+    public void validateRequest(ChatRequest request) {
+        String mode = request.contextMode();
+        if (mode != null && !"client".equals(mode) && !"server".equals(mode)) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "context_mode must be client or server");
+        }
+        if ("server".equals(mode) && (request.messages() == null || request.messages().size() != 1
+                || request.messages().get(0) == null
+                || !"user".equals(request.messages().get(0).role())
+                || request.messages().get(0).content() == null
+                || request.messages().get(0).content().isBlank())) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST,
+                    "server context mode requires exactly one non-empty user message");
+        }
     }
 
     private Mono<Void> writeResponse(ChatRequest request, ServerHttpResponse response, String sessionId) {

@@ -14,7 +14,7 @@
         SELECT id, session_id, role, content, created_at
         FROM messages
         WHERE session_id = #{sessionId}
-        ORDER BY created_at ASC
+        ORDER BY created_at ASC, id ASC
     </select>
 
     <delete id="deleteBySessionId">
