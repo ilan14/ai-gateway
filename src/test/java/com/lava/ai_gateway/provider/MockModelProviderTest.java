@@ -14,6 +14,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.*;
+import static org.awaitility.Awaitility.await;
 import static com.lava.ai_gateway.provider.MockModelProvider.Scenario.*;
 
 class MockModelProviderTest {
@@ -26,9 +27,12 @@ class MockModelProviderTest {
         assertThat(provider.chat(request).block(Duration.ofSeconds(2)).choices().get(0).message().content()).isEqualTo("ok");
         var chunks = provider.streamChat(request).collectList().block(Duration.ofSeconds(2));
         assertThat(chunks).hasSize(7).last().isEqualTo("[DONE]");
-        assertThat(registry.get("gateway.mock.inflight").gauge().value()).isZero();
-        assertThat(registry.get("gateway.mock.requests").tag("stream", "false").counter().count()).isEqualTo(1);
-        assertThat(registry.get("gateway.mock.first.frame").timer().count()).isEqualTo(1);
+        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+            assertRequestCount("stream", "false");
+            assertRequestCount("stream", "true");
+            assertThat(registry.get("gateway.mock.inflight").gauge().value()).isZero();
+            assertThat(registry.get("gateway.mock.first.frame").timer().count()).isEqualTo(1);
+        });
     }
 
     @Test
@@ -37,8 +41,10 @@ class MockModelProviderTest {
         assertThatThrownBy(() -> provider.chat(request).block(Duration.ofSeconds(2)))
                 .isInstanceOf(ResponseStatusException.class)
                 .satisfies(error -> assertThat(((ResponseStatusException) error).getStatusCode().value()).isEqualTo(429));
-        assertThat(registry.get("gateway.mock.requests").tag("outcome", "429").counter().count()).isEqualTo(1);
-        assertThat(registry.get("gateway.mock.inflight").gauge().value()).isZero();
+        await().atMost(Duration.ofSeconds(2)).untilAsserted(() -> {
+            assertRequestCount("outcome", "429");
+            assertThat(registry.get("gateway.mock.inflight").gauge().value()).isZero();
+        });
     }
 
     @Test
@@ -93,6 +99,13 @@ class MockModelProviderTest {
     void rejectsUnboundedSettings() {
         assertThatThrownBy(() -> new MockModelProvider.Settings(NORMAL, 60001, 0, 0, 1, 0, 503, 1, "ok"))
                 .isInstanceOf(ResponseStatusException.class);
+    }
+
+    // doFinally 在终止信号传给下游后执行，block 返回时指标可能尚未登记。
+    private void assertRequestCount(String tag, String value) {
+        var counter = registry.find("gateway.mock.requests").tag(tag, value).counter();
+        assertThat(counter).as("request counter with %s=%s", tag, value).isNotNull();
+        assertThat(counter.count()).isEqualTo(1);
     }
 
     private MockModelProvider.Settings settings(MockModelProvider.Scenario scenario, int status) {
