@@ -1,11 +1,24 @@
 # Mock Provider
 
-Mock is enabled by default and selected only by an explicit `model: "mock"`.
+Mock is enabled by default and selected by an explicit `model: "mock"`.
+The gateway forwards requests to mock-http-server over HTTP, using
+`POST /v1/chat/completions` for both JSON and SSE responses.
 It bypasses session preparation, MySQL persistence and Redis access, ignores
-`X-Session-Id`, and does not return a session header. Other models keep their
-existing behavior. Application startup still loads the database/Redis components.
+`X-Session-Id`, and does not return a session header. Application startup still
+loads the database/Redis components.
 
-## Calling the mock
+## Server configuration
+
+```yaml
+gateway:
+  mock:
+    url: ${MOCK_HTTP_SERVER_URL:http://localhost}
+    port: ${MOCK_HTTP_SERVER_PORT:8081}
+```
+
+`url` specifies the scheme and host. `port` selects the port separately.
+The default upstream endpoint is `http://localhost:8081/v1/chat/completions`.
+Start mock-http-server before sending mock requests.
 
 ```sh
 curl http://localhost:8080/v1/chat/completions \
@@ -13,80 +26,26 @@ curl http://localhost:8080/v1/chat/completions \
   -d '{"model":"mock","messages":[{"role":"user","content":"hello"}],"stream":false}'
 ```
 
-Set `stream` to `true` for SSE. Normal streams end with a finish chunk and `[DONE]`.
-Token usage in non-stream responses is synthetic: one prompt token and one
-completion token per Java string character. It is not a tokenizer estimate.
+Set `stream` to `true` for SSE. The gateway forwards upstream data frames,
+including `[DONE]`, and decodes non-stream JSON as a chat completion.
+Response content, token usage, delays and failures are determined by
+mock-http-server. Configure scenarios directly on that service; ai-gateway
+has no settings state or `/mock/settings` endpoints.
 
-For a quick batch of 1000 requests with concurrency 32 (each output line is the
-HTTP status and total request time), run:
+## Metrics
 
-```sh
-seq 1 1000 | xargs -P 32 -I '{}' curl -sS -o /dev/null --max-time 10 \
-  -w '%{http_code} %{time_total}\n' \
-  http://localhost:8080/v1/chat/completions \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"mock","messages":[{"role":"user","content":"hello"}],"stream":false}'
-```
-
-This is a simple fixed-concurrency smoke load, not a constant arrival-rate benchmark.
-
-## Changing scenarios
-
-`GET /mock/settings` returns the active settings. `PUT /mock/settings` replaces
-all settings atomically. Each request takes a snapshot when subscribed; changes
-apply to subsequent requests. Settings are per process and reset on restart.
-The management endpoint has no built-in authentication; restrict its ingress
-to trusted test operators when sharing a deployment.
-
-```sh
-curl -X PUT http://localhost:8080/mock/settings \
-  -H 'Content-Type: application/json' \
-  -d '{"scenario":"SLOW","delayMs":3000,"jitterMs":500,"frameIntervalMs":100,"frames":10,"faultAfterFrames":3,"errorStatus":503,"failureRate":1,"content":"ok"}'
-```
-
-| Scenario | Behavior |
-| --- | --- |
-| NORMAL | Successful completion after configured delay |
-| SLOW | Successful completion after configured delay; use a larger delayMs |
-| ERROR | Fails with errorStatus at failureRate probability; otherwise succeeds |
-| HANG | Never emits a result; client must cancel |
-| STREAM_ERROR | Emits faultAfterFrames content frames, then fails |
-| STREAM_STALL | Emits faultAfterFrames content frames, then waits for cancellation |
-
-STREAM_ERROR and STREAM_STALL affect streaming requests only; non-stream requests
-succeed normally. delayMs and a random value from zero to jitterMs apply before
-the first result in all scenarios. frameIntervalMs applies between content frames.
-Each frame contains content. Fault streams do not emit a finish chunk or `[DONE]`.
-After SSE is committed, a stream failure cannot change the HTTP status; clients
-observe an interrupted response instead. No timeout, retry, rate limiter or
-circuit breaker is implemented.
-
-Bounds: delayMs/jitterMs 0..60000; frameIntervalMs 0..10000; frames 1..1000;
-faultAfterFrames 0..frames; errorStatus 429/500/503; failureRate 0..1;
-content at most 4096 Java string characters.
-
-## Prometheus and Grafana
-
-Scrape `/actuator/prometheus`. Mock metrics use `provider="mock"`, with bounded
-scenario, stream and outcome labels. Completed, failed and cancelled requests
-are counted at termination; still-hanging requests appear in the inflight gauge.
+Scrape `/actuator/prometheus`. Gateway metrics retain `provider="mock"`,
+`stream` and `outcome` labels. Scenario labels are removed because the gateway
+does not manage or fetch upstream settings.
 
 ```promql
-# Completed/failed/cancelled requests per second
-sum by (scenario, outcome) (rate(gateway_mock_requests_total{provider="mock"}[1m]))
-
-# P95 provider duration, in seconds (includes hanging time before cancellation)
-histogram_quantile(0.95, sum by (le, scenario) (rate(gateway_mock_duration_seconds_bucket[5m])))
-
-# P95 first SSE frame latency, in seconds
-histogram_quantile(0.95, sum by (le, scenario) (rate(gateway_mock_first_frame_seconds_bucket[5m])))
-
-# Currently active provider calls
+sum by (outcome) (rate(gateway_mock_requests_total{provider="mock"}[1m]))
+histogram_quantile(0.95, sum by (le) (rate(gateway_mock_duration_seconds_bucket[5m])))
+histogram_quantile(0.95, sum by (le) (rate(gateway_mock_first_frame_seconds_bucket[5m])))
 gateway_mock_inflight{provider="mock"}
 ```
 
-These are provider metrics, excluding HTTP serialization and response transmission.
-Existing aggregate HTTP/JVM metrics still include Mock traffic and do not gain a
-provider label automatically. Use the dedicated Mock series for scenario analysis.
-Run load generation separately against the normal chat endpoint; configure a client
-timeout for HANG/STREAM_STALL and monitor JVM resources alongside these panels.
+Provider timings include HTTP communication with the upstream server.
+Successful, failed and cancelled calls are counted at termination. Hanging
+requests remain in the inflight gauge until cancellation. HTTP failures use
+the upstream status as the outcome; other failures use `error`.
