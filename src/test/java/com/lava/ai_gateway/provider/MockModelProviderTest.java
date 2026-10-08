@@ -4,8 +4,10 @@ import com.lava.ai_gateway.model.ChatRequest;
 import com.lava.ai_gateway.model.Message;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.Test;
+import org.springframework.boot.env.YamlPropertySourceLoader;
 import org.springframework.context.annotation.AnnotationConfigApplicationContext;
 import org.springframework.core.env.MapPropertySource;
+import org.springframework.core.io.ClassPathResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.codec.HttpMessageWriter;
@@ -20,6 +22,7 @@ import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
 import reactor.core.publisher.Mono;
 
+import java.io.IOException;
 import java.time.Duration;
 import java.util.List;
 import java.util.Map;
@@ -103,15 +106,18 @@ class MockModelProviderTest {
     }
 
     @Test
-    void configurationDefaultsAndOverridesAreInjected() {
+    void configurationDefaultsAndOverridesAreInjected() throws IOException {
         assertConfiguredAddress(Map.of(), "http://localhost:8081/v1/chat/completions");
         assertConfiguredAddress(Map.of("gateway.mock.url", "https://mock.example", "gateway.mock.port", "9443"),
                 "https://mock.example:9443/v1/chat/completions");
     }
 
-    private void assertConfiguredAddress(Map<String, Object> properties, String expected) {
+    private void assertConfiguredAddress(Map<String, Object> properties, String expected) throws IOException {
         registry.clear();
         try (var context = new AnnotationConfigApplicationContext()) {
+            // 普通 Spring 上下文不会自动加载 Boot 配置；使用实际 YAML 验证默认值。
+            var sources = new YamlPropertySourceLoader().load("application", new ClassPathResource("application.yaml"));
+            sources.forEach(source -> context.getEnvironment().getPropertySources().addLast(source));
             context.getEnvironment().getPropertySources().addFirst(new MapPropertySource("test", properties));
             context.registerBean(WebClient.Builder.class, () -> builder(Mono.never()));
             context.registerBean(SimpleMeterRegistry.class, () -> registry);
