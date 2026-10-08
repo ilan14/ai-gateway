@@ -260,37 +260,52 @@
   const streamToggle= document.getElementById('streamToggle');
   const emptyHint   = document.getElementById('emptyHint');
 
-  // 从 /v1/models 加载模型列表
+  let sessionId = null;
+  let activeRequest = null;
+  let modelsReady = false;
+
+  function updateSendButton() {
+    sendBtn.disabled = !modelsReady || !modelSelect.value || activeRequest !== null;
+  }
+
+  updateSendButton();
   (async () => {
     try {
       const res = await fetch('/v1/models');
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      if (!res.ok) throw await responseError(res);
       const data = await res.json();
-      const models = data.data ?? [];
-      modelSelect.innerHTML = '';
+      const models = (data.data ?? []).filter(m => typeof m.id === 'string' && m.id.trim());
+      modelSelect.replaceChildren();
       models.forEach(m => {
         const opt = document.createElement('option');
         opt.value = m.id;
         opt.textContent = m.owned_by ? `${m.id}（${m.owned_by}）` : m.id;
         modelSelect.appendChild(opt);
       });
+      modelsReady = models.length > 0;
+      if (!modelsReady) showModelStatus('暂无可用模型');
     } catch (err) {
-      modelSelect.innerHTML = `<option value="">加载失败: ${err.message}</option>`;
+      showModelStatus(`加载失败: ${err.message}`);
+    } finally {
+      updateSendButton();
     }
   })();
 
-  // 对话历史（传给后端）
-  let history = [];
+  function showModelStatus(text) {
+    const option = document.createElement('option');
+    option.value = '';
+    option.textContent = text;
+    modelSelect.replaceChildren(option);
+  }
 
-  // 自动撑高 textarea
+  modelSelect.addEventListener('change', updateSendButton);
   inputEl.addEventListener('input', () => {
     inputEl.style.height = 'auto';
     inputEl.style.height = Math.min(inputEl.scrollHeight, 180) + 'px';
   });
 
-  // Enter 发送，Shift+Enter 换行
   inputEl.addEventListener('keydown', e => {
-    if (e.key === 'Enter' && !e.shiftKey) {
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing && e.keyCode !== 229) {
       e.preventDefault();
       send();
     }
@@ -298,9 +313,11 @@
 
   sendBtn.addEventListener('click', send);
   document.getElementById('clearBtn').addEventListener('click', () => {
-    history = [];
-    messagesEl.innerHTML = '';
-    messagesEl.appendChild(emptyHint);
+    activeRequest?.controller.abort();
+    activeRequest = null;
+    sessionId = null;
+    messagesEl.replaceChildren(emptyHint);
+    updateSendButton();
   });
 
   function appendMessage(role, content) {
@@ -309,105 +326,164 @@
     wrap.className = `message ${role}`;
     wrap.innerHTML = `<div class="role">${role === 'user' ? '你' : '助手'}</div>
                       <div class="content"></div>`;
+    const contentEl = wrap.querySelector('.content');
+    contentEl.textContent = content;
     messagesEl.appendChild(wrap);
     messagesEl.scrollTop = messagesEl.scrollHeight;
-    return wrap.querySelector('.content');
+    return contentEl;
+  }
+
+  async function responseError(res) {
+    let detail = '';
+    try {
+      const body = await res.text();
+      try {
+        const data = JSON.parse(body);
+        detail = data.error?.message ?? data.message ?? data.detail ?? '';
+      } catch {
+        detail = body;
+      }
+    } catch { /* 响应体不可读时保留 HTTP 状态 */ }
+    return new Error(`HTTP ${res.status}${detail ? `：${detail}` : ''}`);
   }
 
   async function send() {
     const text = inputEl.value.trim();
-    if (!text || sendBtn.disabled) return;
+    if (!text || !modelsReady || !modelSelect.value || activeRequest) return;
 
-    // 显示用户消息
     appendMessage('user', text);
-    history.push({ role: 'user', content: text });
-
     inputEl.value = '';
     inputEl.style.height = 'auto';
-    sendBtn.disabled = true;
 
-    const model  = modelSelect.value;
+    const request = { controller: new AbortController() };
+    activeRequest = request;
+    updateSendButton();
+    const model = modelSelect.value;
     const stream = streamToggle.checked;
     const contentEl = appendMessage('assistant', '');
+    const headers = { 'Content-Type': 'application/json' };
+    if (sessionId && model !== 'mock') headers['X-Session-Id'] = sessionId;
 
     try {
-      if (stream) {
-        await sendStream(model, contentEl);
-      } else {
-        await sendNormal(model, contentEl);
-      }
+      const res = await fetch('/v1/chat/completions', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({ model, messages: [{ role: 'user', content: text }], stream, context_mode: 'server' }),
+        signal: request.controller.signal
+      });
+      if (activeRequest !== request) return;
+      if (!res.ok) throw await responseError(res);
+      if (model !== 'mock') sessionId = res.headers.get('X-Session-Id') || sessionId;
+      stream
+        ? await readStream(res, contentEl)
+        : await readNormal(res, contentEl);
     } catch (err) {
-      contentEl.innerHTML = `<span class="error">请求失败：${err.message}</span>`;
+      if (activeRequest !== request) return;
+      const errorEl = document.createElement('div');
+      errorEl.className = 'error';
+      errorEl.textContent = `请求失败：${err.message}`;
+      contentEl.appendChild(errorEl);
     } finally {
-      sendBtn.disabled = false;
-      inputEl.focus();
+      if (activeRequest === request) {
+        activeRequest = null;
+        updateSendButton();
+        inputEl.focus();
+      }
     }
   }
 
-  async function sendNormal(model, contentEl) {
-    const res = await fetch('/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: history, stream: false })
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
+  async function readNormal(res, contentEl) {
     const data = await res.json();
-    const reply = data.choices?.[0]?.message?.content ?? '';
+    if (data.error) throw new Error(data.error.message || '服务返回错误');
+    const reply = data.choices?.[0]?.message?.content;
+    if (typeof reply !== 'string') throw new Error('响应缺少助手消息内容');
     contentEl.textContent = reply;
-    history.push({ role: 'assistant', content: reply });
     messagesEl.scrollTop = messagesEl.scrollHeight;
+    return reply;
   }
 
-  async function sendStream(model, contentEl) {
-    const res = await fetch('/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ model, messages: history, stream: true })
-    });
-
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-
-    // 添加光标
+  async function readStream(res, contentEl) {
+    if (!res.body) throw new Error('响应缺少流式内容');
     const cursor = document.createElement('span');
     cursor.className = 'cursor';
     contentEl.appendChild(cursor);
-
-    const reader  = res.body.getReader();
+    const reader = res.body.getReader();
     const decoder = new TextDecoder();
-    let reply  = '';
-    let buffer = '';   // 处理跨 chunk 的不完整行
+    let reply = '';
+    let buffer = '';
+    let eventLines = [];
+    let completed = false;
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    function dispatchEvent() {
+      if (!eventLines.length) return;
+      const payload = eventLines.join('\n');
+      eventLines = [];
+      if (payload.trim() === '[DONE]') {
+        completed = true;
+        return;
+      }
+      let json;
+      try {
+        json = JSON.parse(payload);
+      } catch {
+        throw new Error('流式响应包含无效 JSON');
+      }
+      if (json.error) throw new Error(json.error.message || '流式服务返回错误');
+      const choice = json.choices?.[0];
+      const content = choice?.delta?.content;
+      if (content != null && typeof content !== 'string') {
+        throw new Error('流式消息内容格式错误');
+      }
+      reply += content ?? '';
+      cursor.remove();
+      contentEl.textContent = reply;
+      contentEl.appendChild(cursor);
+      messagesEl.scrollTop = messagesEl.scrollHeight;
+    }
 
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split('\n');
-      // 最后一段可能不完整，留到下次拼接
-      buffer = lines.pop();
-
-      for (const line of lines) {
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (payload === '[DONE]') break;
-
-        try {
-          const json    = JSON.parse(payload);
-          const content = json.choices?.[0]?.delta?.content ?? '';
-          reply += content;
-          // 先移除光标，追加文字，再加回光标
-          cursor.remove();
-          contentEl.textContent = reply;
-          contentEl.appendChild(cursor);
-          messagesEl.scrollTop = messagesEl.scrollHeight;
-        } catch { /* 忽略非 JSON 帧 */ }
+    function processLine(line) {
+      if (line === '') {
+        dispatchEvent();
+      } else if (line.startsWith('data:')) {
+        const value = line.slice(5);
+        eventLines.push(value.startsWith(' ') ? value.slice(1) : value);
       }
     }
 
-    cursor.remove();
-    history.push({ role: 'assistant', content: reply });
+    function processBuffer(final = false) {
+      let index;
+      while (!completed && (index = buffer.search(/[\r\n]/)) !== -1) {
+        if (!final && buffer[index] === '\r' && index === buffer.length - 1) break;
+        const size = buffer[index] === '\r' && buffer[index + 1] === '\n' ? 2 : 1;
+        const line = buffer.slice(0, index);
+        buffer = buffer.slice(index + size);
+        processLine(line);
+      }
+      if (final && !completed) {
+        if (buffer) processLine(buffer);
+        buffer = '';
+        dispatchEvent();
+      }
+    }
+
+    try {
+      while (!completed) {
+        const { done, value } = await reader.read();
+        if (done) {
+          buffer += decoder.decode();
+          processBuffer(true);
+          if (!completed) throw new Error('流式响应提前结束，未收到 [DONE]');
+          break;
+        }
+        buffer += decoder.decode(value, { stream: true });
+        processBuffer();
+      }
+      return reply;
+    } finally {
+      cursor.remove();
+      try { await reader.cancel(); } catch { /* 连接已关闭 */ }
+      reader.releaseLock();
+    }
   }
 </script>
 </body>

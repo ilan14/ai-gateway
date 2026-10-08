@@ -5,11 +5,15 @@ import com.lava.ai_gateway.dto.SessionDTO;
 import com.lava.ai_gateway.dto.SessionDetailDTO;
 import com.lava.ai_gateway.entity.MessageEntity;
 import com.lava.ai_gateway.entity.SessionEntity;
+import com.lava.ai_gateway.model.Message;
 import com.lava.ai_gateway.repository.MessageRepository;
 import com.lava.ai_gateway.repository.SessionRepository;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 
 import java.util.List;
 import java.util.Optional;
@@ -29,6 +33,12 @@ public class SessionService {
 
     // ── 对话流程调用 ───────────────────────────────────────────────────────────
 
+    public void requireSession(String sessionId) {
+        if (sessionRepository.findById(sessionId) == null) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Session not found");
+        }
+    }
+
     public SessionEntity getOrCreate(String sessionId, String model) {
         SessionEntity session = sessionRepository.findById(sessionId);
         if (session == null) {
@@ -40,6 +50,12 @@ public class SessionService {
             log.info("Session created → sessionId={}, model={}", sessionId, model);
         }
         return session;
+    }
+
+    public List<Message> loadMessages(String sessionId) {
+        return messageRepository.findBySessionId(sessionId).stream()
+                .map(message -> new Message(message.getRole(), message.getContent()))
+                .toList();
     }
 
     public void appendUserMessage(String sessionId, String content) {
