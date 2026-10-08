@@ -25,8 +25,8 @@ public class MockModelProvider implements ModelProvider {
     private final AtomicInteger inFlight = new AtomicInteger();
 
     public MockModelProvider(WebClient.Builder builder, MeterRegistry registry,
-                             @Value("${gateway.mock.url:http://localhost}") String url,
-                             @Value("${gateway.mock.port:8081}") int port) {
+                             @Value("${gateway.mock.url}") String url,
+                             @Value("${gateway.mock.port}") int port) {
         this.webClient = builder.baseUrl(UriComponentsBuilder.fromUriString(url).port(port)
                 .build().toUriString()).build();
         this.registry = registry;
