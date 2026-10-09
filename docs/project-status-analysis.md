@@ -1,490 +1,196 @@
-# AI Gateway 项目现状与问题分析
-
-> 初始分析日期：2026-07-27  
-> 当前状态复核日期：2026-07-27  
-> 分析分支：`dev`  
-> 本文仅记录现状与问题，不包含代码修复。
-
-## 1. 项目定位
-
-`ai-gateway` 是一个基于 Spring WebFlux 的轻量级 AI 模型网关原型，目标是提供 OpenAI 兼容接口，并在网关侧统一处理模型路由、限流、熔断、会话持久化和消息缓存。
-
-目前已经具备以下主要能力：
-
-- OpenAI 兼容的 `POST /v1/chat/completions`
-- 流式 SSE 与非流式 JSON 响应
-- `GET /v1/models` 模型列表接口
-- DeepSeek、Qwen 和本地 Stub Provider
-- 基于模型名的可插拔路由策略
-- Provider 级限流和熔断
-- Session/IP 维度的调用方限流
-- MySQL 会话与消息持久化
-- Redis 消息历史缓存
-- 会话查询、标题修改和删除接口
-- Swagger/OpenAPI UI
-- 简单的静态测试页面
-
-初始盘点时，项目约包含：
-
-- 42 个生产 Java 文件
-- 7 个测试 Java 文件
-- 生产代码、测试代码和静态页面合计约 2394 行
-
-整体仍处于 MVP/原型阶段，不应视为已经达到生产可用状态。
-
-## 2. 技术栈
-
-当前工作区配置：
-
-| 领域 | 技术 |
-|---|---|
-| Java | Java 25 |
-| 应用框架 | Spring Boot 4.1.0（工作区未提交修改） |
-| Web | Spring WebFlux / Reactor Netty |
-| 数据访问 | MyBatis |
-| 数据库 | MySQL |
-| 缓存 | Redis / Lettuce |
-| 容错 | Resilience4j |
-| API 文档 | Springdoc OpenAPI |
-| 测试 | JUnit 5、Mockito、Reactor Test、H2 |
-| 构建 | Maven Wrapper |
+# AI Gateway 已实现功能与后续演进讨论
 
-需要注意：初始分析时仓库提交版本使用 Spring Boot 3.5.13；当前未提交的 `pom.xml` 已改为 Spring Boot 4.1.0 和 Java 25。因此本文会区分“提交版本问题”和“当前工作区问题”。
+> 复核日期：2026-10-10
+> 分析基线：当前 `main` 工作区的生产代码、配置和测试。
+> 本文替换旧版现状分析；未来功能属于讨论建议，不代表已确认的开发需求。未调用真实模型、MySQL 或 Redis 验证生产环境。
 
-## 3. 核心架构
+## 1. 项目定位与结论
 
-主要请求链路：
+项目已经形成轻量 AI 网关的核心链路：统一文本聊天接口、多厂商适配、流式输出、会话保存、服务端上下文和基础调用监控。适合继续作为接入与联调基础，但完整的协议兼容、访问控制、故障治理和多实例治理尚未完成。
 
-```text
-客户端
-  │
-  ▼
-CallerRateLimiter
-  │  按 X-Session-Id 或 IP 限流
-  ▼
-ChatController
-  ├── 保存用户消息
-  ├── 选择流式/非流式模式
-  ▼
-ModelRouter
-  ├── RoutingPolicy 筛选支持目标模型的 Provider
-  └── ProviderGuard 过滤熔断中的 Provider
-  ▼
-ProviderGuard
-  ├── Provider 级 RateLimiter
-  └── CircuitBreaker
-  ▼
-ModelProvider
-  ├── DeepSeekProvider
-  ├── QwenProvider
-  └── StubModelProvider
-  │
-  ▼
-上游 OpenAI 兼容 API
-```
+建议近期优先完善接口正确性、超时和会话可靠性；需要向多人或外部系统开放时，认证与会话隔离应作为开放前置条件。后续再根据实际调用数据决定是否投入智能路由、成本管理和更多模型能力。
 
-会话数据链路：
+旧文档中的部分结论已不适用：当前 Springdoc 已声明版本，CI 位于正确目录，Actuator/Prometheus 已接入，助手消息保存已纳入响应链路。旧文档提到的 `RoutingPolicy`、`ProviderGuard`、`CallerRateLimiter` 及 Resilience4j 在当前源码和 POM 中不存在，不能计入已实现功能。
 
-```text
-SessionController / ChatController
-  ▼
-SessionService
-  ├── SessionRepository ── MySQL
-  └── MessageRepository
-        ├── Redis 缓存
-        └── MySQL 持久化
-```
+## 2. 技术结构与请求链路
 
-## 4. 当前做得较好的部分
+| 层次 | 当前实现 |
+| --- | --- |
+| 构建 | Maven Wrapper、Java 25、Spring Boot 4.1.1 |
+| HTTP | Spring WebFlux、WebClient、Reactor |
+| 业务 | ChatService 编排聊天；SessionService 管理会话；ModelService 生成模型列表 |
+| 模型接入 | ModelProvider 接口；OpenAI 兼容适配基类；DeepSeek、Qwen、Stub、Mock |
+| 存储 | MyBatis + MySQL；StringRedisTemplate 缓存历史消息 |
+| 文档与监控 | Springdoc、Actuator、Micrometer、Prometheus |
+| 测试 | JUnit、Mockito、Reactor 测试工具、H2 |
 
-### 4.1 分层和扩展性
+正常聊天链路：`ChatController → ChatService → ModelRouter → ModelProvider`。ChatService 调用 SessionService 维护会话和消息，阻塞存储操作通过 `boundedElastic` 调度。
 
-- `ModelProvider` 隔离了不同模型厂商。
-- `AbstractOpenAiCompatibleProvider` 复用了 OpenAI 兼容厂商的调用逻辑。
-- `RoutingPolicy` 已抽象成接口，便于以后实现成本、延迟、上下文长度或权重路由。
-- 限流、熔断、路由和 Controller 的职责边界基本清晰。
+Mock 链路：`ChatController → ChatService → MockModelProvider → mock-http-server`，绕过会话和存储操作，但应用启动仍装配存储相关组件。
 
-### 4.2 WebFlux 与阻塞访问的处理
+## 3. 已实现功能及边界
 
-MyBatis 和 Redis 都属于阻塞式访问。Controller 中的主要数据库操作已经通过 `boundedElastic` 调度，避免直接阻塞 Netty Event Loop，方向正确。
+### 3.1 对外接口
 
-### 4.3 缓存策略
+| 接口 | 已实现行为 | 边界 |
+| --- | --- | --- |
+| `POST /v1/chat/completions` | 非流式 JSON；流式 SSE；返回会话 ID | 当前主要支持文本 Chat Completions 的部分字段 |
+| `GET /v1/models` | 返回 stub、mock 和配置中的厂商模型 | 来源于配置，不代表密钥有效、Provider 已启用或上游健康 |
+| `GET /v1/sessions` | 按最近活跃时间倒序列出会话 | 无分页、用户筛选或权限隔离 |
+| `GET /v1/sessions/{sessionId}` | 返回会话信息及完整消息历史；不存在返回 404 | 全量读取 |
+| `PUT /v1/sessions/{sessionId}/title` | 修改标题；成功 204，不存在 404 | 缺少完整标题校验 |
+| `DELETE /v1/sessions/{sessionId}` | 删除消息、缓存和会话；数据库删除使用事务 | Redis 操作不属于数据库事务 |
+| `/actuator/health`、`/actuator/prometheus` | 配置暴露健康和指标端点 | 未验证真实部署的健康状态、采集和告警 |
 
-消息历史采用 cache-aside：
+ChatRequest 显式建模 `model`、`messages`、`stream`、`temperature`、`max_tokens` 和网关扩展字段 `context_mode`。Message 的 content 是字符串；尚无工具调用、多模态内容、结构化输出和 Responses 等接口实现，不能称为完整 OpenAI API 兼容。
 
-- 读取时优先查询 Redis
-- 未命中时读取 MySQL 并回填
-- 新增或删除消息时主动删除缓存
-- 缓存 TTL 为两小时
+### 3.2 厂商接入和模型路由
 
-对当前规模而言，该方案简单且容易理解。
+- DeepSeek 和 Qwen 复用 `AbstractOpenAiCompatibleProvider`，通过 WebClient 发起请求，支持 JSON 和 SSE；模型名、地址和密钥来自配置。
+- 配置包含 deepseek-chat、deepseek-reasoner、qwen-flash、qwen-plus、qwen-max；这些是配置声明，未实测上游可用性。推理模型名称存在不代表推理内容字段已经完整适配。
+- ModelRouter 根据模型名寻找第一个支持它的 Provider。未指定模型时使用配置中的默认模型；找不到匹配 Provider 时返回 Stub。
+- Stub 本地返回固定 `ok`，支持流式和非流式，用于连通性验证。
+- Mock 显式通过 `model=mock` 选择，转发至独立 mock-http-server。延迟、错误和响应内容由上游 Mock 服务管理，网关没有场景管理接口。
 
-### 4.4 设计过程可追溯
+当前不包含权重路由、熔断、限流、自动重试和故障转移。路由器注释提到默认模型回退，但显式未知模型的实际代码直接回退 Stub。
 
-仓库内存在模型路由重构设计和实施计划，Git 提交也按照路由策略、ProviderGuard、调用方限流和 Controller 接入逐步拆分，开发过程相对清晰。
+### 3.3 会话与上下文
 
-## 5. 当前构建与测试状态
+- 普通聊天未传或传空 `X-Session-Id` 时生成 UUID，并在响应头返回；传入非空值时要求规范 UUID 且会话已存在，分别以 400/404 拒绝非法值或不存在的会话。
+- `context_mode` 省略或为 `client` 时，使用客户端提交的 messages，不自动拼接历史。
+- `context_mode=server` 时，只接受一条非空 user 消息，从存储读取历史并拼接本轮输入；网关扩展字段不传给真实 Provider。
+- 保存本轮最后一条 user 消息和第一条 choice 的助手文本，不完整归档客户端提交的所有角色和消息；system 等信息也不会自动保留到后续服务端上下文。
+- 首条 user 内容用于生成标题，超过 20 个 Java 字符单位截断并加省略号；每次追加消息刷新会话活跃时间。
+- 非流式在助手保存结束后返回响应。普通流式累积首条 choice 的 delta.content，收到 `[DONE]` 后停止上游，保存助手内容，再向客户端发送 `[DONE]`。
+- 普通流式遇到非法 JSON、错误内容或缺少 `[DONE]` 会失败；取消或失败不会保存当前部分助手文本，空白助手内容也不保存。
+- Mock 忽略会话头且不返回该响应头，不执行上述历史拼接、完成标志校验和持久化流程。
 
-### 5.1 当前工作区状态
+### 3.4 数据存储和缓存
 
-复核时 Git 状态为：
+MySQL 保存 sessions/messages；消息按 created_at、id 升序读取，会话业务 ID 有唯一索引。数据库初始化 SQL 作为参考文件，配置禁止自动初始化。
 
-```text
-## dev
- M pom.xml
-?? .github/
-```
+历史查询使用 cache-aside：Redis 命中直接返回，未命中查询 MySQL 并缓存两小时；新增或删除消息后清除缓存。当前没有 Redis 故障降级、并发回填一致性保障、消息分页和数据库迁移机制。
 
-`pom.xml` 和 `.github/` 都是用户尚未提交的工作，不应被自动覆盖或回滚。
+### 3.5 监控、联调与工程化
 
-### 5.2 当前 Maven 构建在解析 POM 时失败
+- 真实 Provider 已统计开始次数、结束结果、在途调用数、总耗时、流式首帧耗时，按 provider/model/stream 区分；结果区分 success/error/cancelled。
+- 模型指标使用配置内模型或 unknown 标签，避免任意模型输入产生无限标签；总耗时不包含历史读取和回复落库，首帧不等于首次有效文本。
+- Mock 有独立调用指标；Stub 不产生真实下游调用指标。详细查询见 [接口与模型调用监控](模型调用监控.md)。
+- 静态页面支持加载模型、输入消息、流式/非流式回复以及服务端上下文续聊；不是完整会话管理后台。
+- 已有 OpenAPI 配置、Docker Compose 和 GitHub Actions 工作流。Compose 的 MySQL/Redis 使用外部服务，部署是否能正常启动未在本次验证。
+- 测试涉及 ChatService、ChatController、SessionService、Provider 指标、Mock Provider 和 Mapper；Mapper 使用 H2。测试覆盖不等于已经通过真实厂商或完整生产环境验证。
 
-执行：
+## 4. 近期需要优先补齐的问题
 
-```bash
-./mvnw test
-```
+| 优先级 | 当前缺口 | 影响和建议 |
+| --- | --- | --- |
+| P0（对外开放前） | 没有认证与会话归属 | 持有 ID 即可访问会话，列表返回所有会话；至少建立网关 API Key、身份归属和查询权限 |
+| P1 | 未知模型静默回退 Stub | 真模型拼写错误可能仍返回成功；显式未知模型应报错，Stub 只允许显式选择或开发配置 |
+| P1 | 默认模型语义不一致 | 路由使用配置默认值，保存会话时 null 模型写 stub，上游仍接收原 model；在 Service 统一解析最终模型并用于路由、持久化和转发 |
+| P1 | 校验和错误协议不足 | client 模式 messages、role/content、temperature/max_tokens、标题缺少完整校验；增加统一错误结构和上游状态映射 |
+| P1 | 缺少明确上游超时 | 配置连接、首帧、流间隔和整体预算；响应开始后用明确的 SSE 错误约定通知客户端 |
+| P1 | 模型列表与启用状态不一致 | 从实际 Provider 和模型配置交集生成列表；明确未设置/空密钥时的装配行为 |
+| P1 | 会话并发与失败状态不明确 | getOrCreate 是先查后插；同会话并发可能乱序；请求失败会留下用户消息，需要轮次、状态或顺序控制 |
+| P1 | 缓存影响核心可用性 | Redis 故障可能直接阻断读写；增加降级，并处理失效后旧查询回填造成的过期历史 |
+| P2 | 无限历史增长 | 全量查会话/消息、全量拼上下文，成本和内存随历史增长；增加分页及上下文预算 |
+| P2 | 工程验证范围不足 | 补充 ModelRouter、ModelService、Repository 和 HTTP 级错误测试；完善启动配置验证 |
 
-当前结果：
+这里的 P0/P1 是建议推进顺序，不代表已确认开发范围，也不代表未经运行验证的故障已经发生。
 
-```text
-'dependencies.dependency.version' for
-org.springdoc:springdoc-openapi-starter-webflux-ui:jar is missing
+## 5. 未来可考虑实现的功能
 
-BUILD FAILURE
-```
+### 5.1 接口可靠性与故障治理（建议优先）
 
-Maven 尚未进入编译和测试阶段。原因是升级到 Spring Boot 4.1.0 后，`springdoc-openapi-starter-webflux-ui` 没有显式版本，而当前依赖管理没有为它提供版本。
+**目标：** 让调用方明确区分参数错误、上游失败和成功回复。
 
-### 5.3 初始测试结果
+**实现思路：** Controller 保留基本校验，Service 统一模型解析；增加统一异常映射、请求 ID、Provider 超时预算。先支持单 Provider 的可预测行为，再引入并发上限、限流和熔断。
 
-在此前 Spring Boot 3.5.13 的工作区状态下执行测试，结果为：
+**验收：** 未知模型不返回 ok；缺失 messages 返回明确 400；上游 429/5xx 和超时有约定结果；流开始前后错误分别有测试；取消后在途计数恢复。
 
-```text
-Tests run: 29, Failures: 0, Errors: 17, Skipped: 0
-BUILD FAILURE
-```
+**讨论：** 流式重试只能在尚未输出内容时考虑，输出后切换 Provider 可能重复或混合回答。不要为获得更高成功率无条件重试，避免额外费用。
 
-当时错误分为：
+### 5.2 认证、会话隔离与配额（开放前必需）
 
-1. Spring 上下文无法创建 `ProviderGuard`
-2. Java 25 下 Mockito/Byte Buddy 无法动态挂载 Agent
+**目标：** 多人使用时隔离数据并控制滥用。
 
-因此即使修复当前 POM，后续仍可能遇到这些问题。
+**实现思路：** 从网关 API Key 和用户/项目归属开始，Provider 密钥仅在服务端管理；全部会话查询和写操作校验归属。增加请求速率和并发限制，需要多实例后再考虑共享额度。
 
-## 6. 问题清单
+**验收：** 未认证请求被拒绝；用户不能列出、读取、修改或删除其他用户会话；越权失败不泄露内容；限流有稳定响应。
 
-### P0：当前项目无法构建
+**讨论：** 自用网关可先做单用户身份，团队服务再扩展租户。Token 配额需区分请求预估与最终结算，不能直接把 QPS 当成成本控制。
 
-#### P0-1 Springdoc 依赖缺少版本
+### 5.3 会话产品能力与上下文预算（建议第二阶段）
 
-当前 `pom.xml` 将 Spring Boot 升级到 4.1.0，并删除了 Springdoc 显式版本，导致 Maven 无法解析项目。
+**目标：** 支持长期、多轮对话，避免历史无限增长。
 
-影响：
+**实现思路：** 会话和消息分页、搜索、归档、导出；为每轮建立顺序和生成状态，限制同会话并发。服务端上下文保存 system 指令，按模型预算保留最近消息；必要时再增加摘要。
 
-- 无法编译
-- 无法运行测试
-- 无法打包或启动
-- CI 无法执行
+**验收：** 分页稳定无重复；长会话上下文不会超过设定预算；中断/失败状态可查询；并发不会污染轮次；上下文裁剪行为可复现。
 
-建议：
+**讨论：** 先做确定性裁剪，摘要会额外调用模型并可能丢信息；继续讨论是否保存失败回复、是否允许切换会话模型和恢复生成。
 
-- 选择明确支持 Spring Boot 4 的 Springdoc 版本并显式声明；或者
-- 在完成兼容性验证前保留 Spring Boot 3.5.x。
+### 5.4 Token、成本和告警（按实际运营需求）
 
-不要只为了消除 Maven 报错随意填写版本，应同时验证 Springdoc、MyBatis Starter、Resilience4j 和 Spring Boot 4/Spring Framework 7 的兼容性。
+**目标：** 解释费用来源，发现模型性能下降。
 
-#### P0-2 `.github/ci.yml` 不是合法的 GitHub Actions 工作流
+**实现思路：** 在现有指标上增加有效内容首帧、Token 用量、错误分类、缓存命中率和持久化耗时；形成仪表盘及错误率/延迟告警。记录价格版本，区分上游真实 usage 与估算值。
 
-当前 `.github/ci.yml` 的内容实际上是一份 Maven POM XML，而不是 YAML。
+**验收：** 每个请求可关联 Provider、结果和用量；缺失 usage 不伪装为零费用；计费明细可核对；监控标签不包含用户 ID 或会话 ID 等高基数字段。
 
-影响：
+**讨论：** 流式 usage 需先完善协议字段支持。技术监控与账务记录分开，Prometheus 计数不作为精确账单。
 
-- GitHub Actions 不会将其识别为合法工作流
-- 即使修复文件内容，标准工作流目录应为 `.github/workflows/*.yml`
-- 项目目前没有可用的自动化构建基线
+### 5.5 多 Provider 路由与故障转移（有冗余供应商后）
 
-建议将 CI 文件放到类似：
+**目标：** 在成本、延迟和可用性之间选择合适上游。
 
-```text
-.github/workflows/ci.yml
-```
+**实现思路：** 先做逻辑模型别名、显式候选顺序和健康过滤，再根据指标增加权重或成本策略。逻辑模型映射到各 Provider 的真实模型名，能力不兼容时不得自动替换。
 
-并配置 JDK 25、Maven 缓存和 `./mvnw verify`。
+**验收：** 路由选择可追溯；真实模型名正确转发；无可用候选返回明确错误；流已输出后不自动切换；不会回退 Stub 掩盖故障。
 
-### P1：应用启动阻断
+**讨论：** 当前按名称取第一个 Provider 无法表达稳定优先级。只有存在可替代供应商及实际收益时再抽象策略接口。
 
-#### P1-1 `ProviderGuard` 构造器注入不明确
+### 5.6 更完整的模型能力（业务驱动）
 
-`ProviderGuard` 同时包含生产构造器和包级测试构造器。初始上下文测试中，Spring 没有选择生产构造器，而是尝试寻找无参构造器，导致：
+| 候选能力 | 价值 | 前置条件与取舍 |
+| --- | --- | --- |
+| 工具调用 | 支持 Agent 和外部操作 | 扩展 tool_calls/tool 消息及流式增量；先透传协议，工具执行需要独立权限边界 |
+| JSON/结构化输出 | 支持信息提取和业务集成 | 定义 response_format/schema；验证各 Provider 差异 |
+| 多模态输入 | 图片理解等场景 | content 改为文本/内容块模型；增加大小、类型和资源访问限制 |
+| Embeddings | 支持语义检索基础能力 | 独立接口、响应和模型目录；不必同时引入完整 RAG 平台 |
+| Responses 接口 | 扩展客户端接入范围 | 作为独立协议适配，明确与现有会话管理的边界 |
+| 更多 Provider | 扩大可选模型范围 | 先完善协议契约和模拟测试，避免仅增加配置即声称完整支持 |
 
-```text
-No default constructor found
-```
+这些能力可以分开落地，无需一次性完成。RAG、工作流编排、Agent 执行平台和商业计费后台暂不建议并入核心网关，除非已经有明确业务需求。
 
-建议明确标注生产构造器，或者把测试构造方式迁移到工厂方法/测试配置，避免组件本身暴露多个候选构造器。
+### 5.7 运维和配置管理（部署规模驱动）
 
-#### P1-2 `CallerRateLimiter` 存在相同模式
+可考虑开发/测试/生产 Profile、配置启动校验、数据库版本迁移、脱敏审计和数据保留策略。Provider 配置后台与热更新先确认运维频率，低频变更继续使用配置文件即可。
 
-`CallerRateLimiter` 同样包含两个构造器。即使先修复 `ProviderGuard`，它也可能成为下一个上下文启动问题。
+验收应包括：缺少密钥时启动行为明确；升级与回滚可演练；测试只访问 H2/mock；日志不记录密钥和完整敏感消息；备份恢复经过验证。
 
-### P1：Java 25 测试工具链未配置完整
+## 6. 建议推进路线与下一次讨论
 
-项目采用 Java 25 是合理的，因为它是 LTS，并且 Spring Boot 3.5 支持 Java 25，Spring Boot 4.1 也支持 Java 25。
+1. **阶段一：接口和可靠性。** 统一模型语义、模型列表、输入校验与错误协议，补齐超时和故障测试。对外开放则同时完成认证和会话隔离。
+2. **阶段二：会话体验。** 实现轮次状态、并发顺序、分页、上下文预算与 Redis 降级。
+3. **阶段三：运营治理。** 按数据补充用量统计、告警、配额；有替代供应商后实现故障转移。
+4. **阶段四：业务扩展。** 选择工具调用、结构化输出、多模态或新接口中真正需要的一项。
 
-当前问题并不是 Java 25 本身，而是 Mockito 默认 inline mock maker 依赖运行时动态挂载 Byte Buddy Agent。较新 JDK 对动态 Agent 加载限制更严格，当前测试出现：
+建议下一次需求讨论先确定：网关服务自用还是团队/公网；是否默认由服务端管理上下文；最近最突出的问题是稳定性、费用还是功能缺失；是否有可替代的真实 Provider。确认后为选定功能另写技术方案，再实现代码，避免把候选清单直接当成开发承诺。
 
-```text
-Could not initialize inline Byte Buddy mock maker
-Could not self-attach to current VM
-```
+## 7. 本次验证与证据索引
 
-建议：
+本文仅更新分析文档，不修改业务代码、配置或 README。运行现有单元测试用于复核基线，不新增与文档文字绑定的测试。存储测试使用现有 H2 配置，服务测试使用 mock。
 
-- 在 Maven Surefire 中显式配置 Mockito Java Agent
-- 固定 Maven、Surefire、Mockito 和 Byte Buddy 版本组合
-- CI 与本地统一使用同一 JDK 25 发行版
-- 不依赖“本地刚好允许动态挂载”的隐式行为
+主要证据：
 
-### P1：模型路由语义错误
+- 接口：`src/main/java/com/lava/ai_gateway/controller/`
+- 编排与上下文：`src/main/java/com/lava/ai_gateway/service/ChatService.java`
+- 会话行为：`src/main/java/com/lava/ai_gateway/service/SessionService.java`
+- 模型列表与路由：`ModelService.java`、`router/ModelRouter.java`
+- 协议及监控：`provider/`、`model/`
+- 缓存：`repository/impl/MessageRepositoryImpl.java`
+- 数据结构：`src/main/resources/schema.sql`、`mapper/`
+- 配置与工程：`pom.xml`、`application.yaml`、`compose.yaml`、`.github/workflows/ci.yml`
+- 测试：`src/test/java/com/lava/ai_gateway/`、`src/test/resources/application-mapper-test.yaml`
 
-#### P1-3 未知模型静默回退到 Stub
-
-如果请求模型不存在、Provider 未启用或 Provider 熔断，`ModelRouter` 最终都会返回 Stub Provider。
-
-风险：
-
-- 调用方请求真实模型，却得到固定的 `"ok"`
-- HTTP 层表现为成功，掩盖配置错误和生产故障
-- 监控难以发现真实 Provider 已不可用
-
-建议区分：
-
-- 未知模型：返回 OpenAI 兼容的 400/404 错误
-- 已知模型但 Provider 暂不可用：返回 503
-- Stub：只允许显式请求 `model=stub`，或仅在开发 Profile 启用
-
-#### P1-4 模型列表可能展示未真正启用的 Provider
-
-`ModelsController` 从 `GatewayProperties.providers` 枚举模型，再调用 `ProviderGuard.isAvailable(providerName)`。
-
-但配置存在不代表对应 Provider Bean 已成功创建；Resilience4j Registry 又可能为一个新名称即时创建 CLOSED 状态的熔断器。因此没有有效 API Key 的 Provider 也可能被展示为“可用”。
-
-建议让模型列表来源于实际注入的 `List<ModelProvider>`，并结合 Provider 健康状态生成结果。
-
-### P1：Provider 条件装配不稳健
-
-配置中使用：
-
-```yaml
-api-key: ${DEEP_SEEK_API_KEY}
-api-key: ${QWEN_API_KEY}
-```
-
-Provider 使用 `@ConditionalOnProperty` 判断属性是否存在。属性键存在并不等同于 API Key 有效：
-
-- 环境变量未设置时可能导致占位符解析失败
-- 某些情况下条件仍可能因配置键存在而匹配
-- 空字符串和真实密钥没有得到明确区分
-
-建议：
-
-- 为未配置状态设计明确语义
-- 使用 `matchIfMissing = false`
-- 校验绑定后的 API Key 是否非空
-- 避免在日志和异常中泄露密钥
-
-### P1：缺少输入校验和统一错误协议
-
-`ChatRequest` 没有 Bean Validation。当前代码在记录日志时直接调用 `request.messages().size()`，当 `messages` 为 `null` 时会抛出空指针。
-
-其他缺失校验包括：
-
-- message role/content
-- session ID 格式和长度
-- 会话标题空值与最大长度
-- temperature 范围
-- max_tokens 合法范围
-
-错误响应目前主要是空 body 的 500/503，不符合 OpenAI 兼容错误结构。建议增加统一异常处理和标准错误 DTO。
-
-### P1：上游调用缺少超时
-
-WebClient 没有明确配置：
-
-- 连接超时
-- 响应超时
-- 读取超时
-- 整体请求超时
-
-模型 Provider 卡住时可能长期占用连接和请求资源。网关类项目必须明确超时预算，并将超时纳入熔断统计。
-
-### P1：流式错误不能可靠传递
-
-流式响应开始写出后，HTTP 状态和响应头通常已经提交。此时再设置 503 可能无效。
-
-当前通用流错误直接返回空 Flux，客户端可能看到：
-
-- HTTP 200
-- 不完整的 SSE 数据
-- 没有明确错误事件或 `[DONE]`
-
-建议：
-
-- 在写出首个 chunk 前尽量完成可用性检查
-- 写出后以约定的 SSE error event 表达错误
-- 明确客户端断连、上游断连和网关错误的处理策略
-
-### P2：Provider 限流错误映射不准确
-
-Provider RateLimiter 拒绝请求时，异常会进入通用异常处理并返回 500。
-
-更合理的语义通常为：
-
-- 429：调用方稍后重试
-- 503：上游容量暂不可用
-
-同时应设置适当的 `Retry-After`。
-
-### P2：会话消息持久化存在一致性问题
-
-#### P2-1 助手消息采用 fire-and-forget
-
-助手消息通过内部 `subscribe()` 异步写入：
-
-- HTTP 响应完成不代表消息已持久化
-- 应用关闭时可能丢消息
-- 保存失败只记录日志，调用方无感知
-
-#### P2-2 用户消息与模型调用不具备完整事务语义
-
-用户消息先保存，再调用上游模型。如果上游失败，会留下只有用户消息的不完整会话。虽然这可能是产品允许的状态，但目前没有显式的消息状态字段来表示失败、生成中或已完成。
-
-#### P2-3 `getOrCreate` 存在并发竞争
-
-当前逻辑是先查询再插入。两个请求并发使用同一个新 Session ID 时，都可能判断不存在，然后其中一个触发唯一键冲突。
-
-建议采用数据库原子 upsert、捕获唯一键冲突后重查，或者调整会话创建协议。
-
-### P2：Redis 是事实上的强依赖
-
-消息 Repository 在 Redis 读取、写入或删除失败时没有降级策略。
-
-结果：
-
-- Redis 故障可能让本应可从 MySQL 读取的会话接口一起失败
-- 缓存从性能优化变成了可用性依赖
-
-建议根据业务目标决定：
-
-- Redis 故障时降级到 MySQL，并记录指标；或者
-- 明确 Redis 是强依赖，并通过健康检查阻止实例接流量。
-
-### P2：单机限流无法支持集群一致性
-
-调用方限流和 Provider 限流都保存在当前 JVM 内存。
-
-多实例部署后：
-
-- 每个实例都有独立额度
-- 总调用量可能达到配置值乘以实例数
-- 调用方经负载均衡后可以绕过单实例限制
-
-MVP 阶段可以接受，但生产多实例前需要分布式限流或网关层统一限流。
-
-### P2：数据库约束不足
-
-`messages.session_id` 只有普通索引，没有外键约束。
-
-风险：
-
-- 应用异常或人工操作可能产生孤儿消息
-- 删除一致性完全依赖 Service 代码
-
-此外建议评估：
-
-- `(session_id, created_at, id)` 组合索引
-- 消息 role 的约束
-- 标题和模型字段长度
-- 使用 Flyway/Liquibase 管理 schema，而不是手工运行 `schema.sql`
-
-### P2：可观测性不足
-
-项目目前主要依赖普通日志，缺少：
-
-- Actuator 健康检查
-- Prometheus/Micrometer 指标
-- 每个 Provider 的延迟、成功率和错误率
-- 熔断器状态与限流拒绝次数
-- Token 使用量和模型成本
-- Redis 命中率
-- 数据库连接池指标
-- 请求 Trace/Correlation ID
-
-对于 AI 网关，可观测性不是附属功能，而是定位模型延迟、限额和成本问题的基础。
-
-### P3：工程化和产品能力缺口
-
-- 没有正式 README 和启动说明
-- 没有环境变量示例
-- 没有 Dockerfile/Compose
-- 没有 API Key 认证
-- 没有多租户、配额或计费
-- 没有 Provider 故障后自动尝试下一个候选者
-- 没有 Controller/API 级集成测试
-- 没有数据库迁移工具
-- 没有明确的生产、测试、开发 Profile
-
-## 7. 建议修复顺序
-
-### 第一阶段：恢复工程基线
-
-1. 决定 Spring Boot 版本路线：
-   - 稳妥路线：Spring Boot 3.5.x + Java 25
-   - 前沿路线：Spring Boot 4.1.x + Java 25，并逐项验证生态兼容性
-2. 修复 Springdoc 版本，使 Maven 可以解析 POM。
-3. 修复 `.github/ci.yml` 的目录和内容。
-4. 修复 `ProviderGuard`、`CallerRateLimiter` 构造器注入。
-5. 显式配置 Mockito Java Agent。
-6. 使 `./mvnw verify` 在本地和 CI 都通过。
-
-### 第二阶段：修复 API 正确性
-
-1. 未知模型不再静默回退 Stub。
-2. 模型列表只展示实际启用的 Provider。
-3. 修复 Provider API Key 条件装配。
-4. 增加请求校验和 OpenAI 兼容错误响应。
-5. 正确映射限流、熔断和上游错误状态。
-
-### 第三阶段：提升可靠性
-
-1. 配置 WebClient 超时。
-2. 设计流式错误协议。
-3. 改善消息持久化一致性。
-4. 增加 Redis 降级或明确强依赖策略。
-5. 增加 Provider 故障转移。
-6. 引入数据库迁移工具。
-
-### 第四阶段：生产化
-
-1. API Key 认证和租户隔离。
-2. 分布式限流和配额。
-3. Actuator、Micrometer、Prometheus 和链路追踪。
-4. Token/成本统计。
-5. Docker 和部署文档。
-6. 端到端与故障场景测试。
-
-## 8. 总结
-
-项目的领域拆分和架构方向总体合理，尤其是 Provider 抽象、路由策略、限流熔断分层以及 MySQL/Redis Repository 设计，已经具备继续演进的基础。
-
-但当前项目仍处于“重构尚未收口”的状态：
-
-- 当前 POM 无法解析
-- CI 文件无效
-- 此前应用上下文无法启动
-- Java 25 测试 Agent 尚未正确配置
-- 模型路由与可用模型展示存在语义错误
-- 超时、错误协议、一致性和可观测性尚未达到网关生产要求
-
-当前最有价值的工作不是继续增加 Provider 或新功能，而是先建立一条稳定、可重复的构建和测试基线，再逐步修复 API 正确性与可靠性问题。
+首次执行 `./mvnw test`：42 项测试，0 项断言失败、16 项错误，构建失败；错误来自 Mockito inline mock maker 无法动态挂载 Agent。该结果是本次环境的实测，不能沿用旧文档的 POM 解析失败结论。随后执行 `./mvnw test -DargLine=-javaagent:/Users/mingjie/.m2/repository/org/mockito/mockito-core/5.23.0/mockito-core-5.23.0.jar`：42 项测试全部通过，0 失败、0 错误、0 跳过，未修改 POM。Agent 路径为本机依赖缓存，其他环境需要使用各自实际路径；建议后续在构建中统一 Agent 配置。
