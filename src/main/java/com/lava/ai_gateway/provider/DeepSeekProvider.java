@@ -1,6 +1,7 @@
 package com.lava.ai_gateway.provider;
 
 import com.lava.ai_gateway.config.GatewayProperties;
+import io.micrometer.core.instrument.MeterRegistry;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -9,8 +10,8 @@ import org.springframework.web.reactive.function.client.WebClient;
 @ConditionalOnProperty("gateway.providers.deepseek.api-key")
 public class DeepSeekProvider extends AbstractOpenAiCompatibleProvider {
 
-    public DeepSeekProvider(WebClient.Builder webClientBuilder, GatewayProperties properties) {
-        super(webClientBuilder, properties.getProviders().get("deepseek"));
+    public DeepSeekProvider(WebClient.Builder webClientBuilder, GatewayProperties properties, MeterRegistry registry) {
+        super(webClientBuilder, properties.getProviders().get("deepseek"), registry);
     }
 
     @Override
