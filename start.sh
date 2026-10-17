@@ -28,6 +28,10 @@ fi
 JVM_ARGS="-Dfile.encoding=UTF-8
           -Xms256m
           -Xmx512m
+          -XX:+UseG1GC
+          -Xlog:gc*,safepoint:file=./logs/gc.log:time,uptime,level,tags:filecount=5,filesize=20M
+          -XX:+HeapDumpOnOutOfMemoryError
+          -XX:HeapDumpPath=./logs
           "
 
 mkdir -p -- "$(dirname -- "$LOG_FILE")" "$(dirname -- "$PID_FILE")"
