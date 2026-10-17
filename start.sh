@@ -25,19 +25,26 @@ if [[ ${#JARS[@]} -ne 1 ]]; then
   exit 1
 fi
 
-JVM_ARGS="-Dfile.encoding=UTF-8
-          -Xms256m
-          -Xmx512m
-          -XX:+UseG1GC
-          -Xlog:gc*,safepoint:file=./logs/gc.log:time,uptime,level,tags:filecount=5,filesize=20M
-          -XX:+HeapDumpOnOutOfMemoryError
-          -XX:HeapDumpPath=./logs
-          "
+JVM_ARGS=(
+  "-Dfile.encoding=UTF-8"
+  "-Xms256m"
+  "-Xmx512m"
+  "-XX:+UseG1GC"
+  "-Xlog:gc*,safepoint:file=./logs/gc.log:time,uptime,level,tags:filecount=5,filesize=20M"
+  "-XX:+HeapDumpOnOutOfMemoryError"
+  "-XX:HeapDumpPath=./logs"
+)
+
+nohup java "${JVM_ARGS[@]}" \
+  -jar "${JARS[0]}" \
+  >> "$LOG_FILE" 2>&1 < /dev/null &
 
 mkdir -p -- "$(dirname -- "$LOG_FILE")" "$(dirname -- "$PID_FILE")"
 echo "后台启动 ${JARS[0]}。"
-nohup java $JVM_ARGS -jar "${JARS[0]}" >> "$LOG_FILE" 2>&1 < /dev/null &
-APP_PID=$!
+nohup java "${JVM_ARGS[@]}" \
+  -jar "${JARS[0]}" \
+  >> "$LOG_FILE" 2>&1 < /dev/null &
+  APP_PID=$!
 printf '%s\n' "$APP_PID" > "$PID_FILE"
 echo "启动进程已创建，PID：${APP_PID}；应用是否就绪请查看日志。"
 echo "查看日志：tail -f ${PROJECT_DIR}/${LOG_FILE}"
