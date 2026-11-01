@@ -4,6 +4,7 @@ import com.lava.ai_gateway.model.ChatRequest;
 import com.lava.ai_gateway.model.ChatResponse;
 import com.lava.ai_gateway.model.Message;
 import com.lava.ai_gateway.provider.ModelProvider;
+import com.lava.ai_gateway.protection.ModelProtection;
 import com.lava.ai_gateway.router.ModelRouter;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -18,6 +19,7 @@ import tools.jackson.databind.ObjectMapper;
 import java.util.ArrayList;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.function.Supplier;
 
 /** 聊天业务编排：模型路由、会话维护和回复持久化。 */
 @Service
@@ -25,20 +27,42 @@ public class ChatService {
 
     private static final Logger log = LoggerFactory.getLogger(ChatService.class);
 
+    private final ModelProtection protection;
+
+    private ChatRequest normalized(ChatRequest request) {
+        return new ChatRequest(router.resolveModel(request.model()), request.messages(), request.stream(),
+                request.temperature(), request.maxTokens(), request.contextMode());
+    }
+
+    private <T> Flux<T> guarded(ChatRequest request, Supplier<Flux<T>> action) {
+        ModelProvider provider = router.route(request.model());
+        return protection.guard(provider.name(), request.model() == null ? "default" : request.model(), action);
+    }
+
+    private <T> Flux<T> observed(boolean stream, Supplier<Flux<T>> action) {
+        return protection.observe(stream, action);
+    }
+
     private final ModelRouter router;
     private final ObjectMapper objectMapper;
     private final SessionService sessionService;
 
-    public ChatService(ModelRouter router, ObjectMapper objectMapper, SessionService sessionService) {
+    public ChatService(ModelRouter router, ObjectMapper objectMapper, SessionService sessionService, ModelProtection protection) {
+        this.protection = protection;
         this.router = router;
         this.objectMapper = objectMapper;
         this.sessionService = sessionService;
     }
 
     public Flux<String> streamChat(ChatRequest request, String rawSessionId) {
+        ChatRequest resolved = normalized(request);
+        return guarded(resolved, () -> streamChatInternal(resolved, rawSessionId));
+    }
+
+    private Flux<String> streamChatInternal(ChatRequest request, String rawSessionId) {
         return Flux.defer(() -> {
             if (isMock(request)) {
-                return router.route("mock").streamChat(request);
+                return observed(true, () -> router.route("mock").streamChat(request));
             }
 
             String sessionId = resolveSessionId(rawSessionId);
@@ -47,7 +71,8 @@ public class ChatService {
             AtomicBoolean completed = new AtomicBoolean();
 
             return prepareRequest(request, sessionId).flatMapMany(prepared ->
-                    provider.streamChat(prepared)
+                    observed(true, () -> provider.streamChat(prepared)
+                            .doOnNext(chunk -> accumulateContent(chunk, assistantContent)))
                             .takeUntil("[DONE]"::equals)
                             .doOnNext(chunk -> {
                                 if ("[DONE]".equals(chunk)) {
@@ -55,7 +80,6 @@ public class ChatService {
                                 }
                             })
                             .filter(chunk -> !"[DONE]".equals(chunk))
-                            .doOnNext(chunk -> accumulateContent(chunk, assistantContent))
                             .concatWith(Flux.defer(() -> {
                                 if (!completed.get()) {
                                     return Flux.error(new IllegalStateException("Provider stream ended without [DONE]"));
@@ -66,15 +90,20 @@ public class ChatService {
     }
 
     public Mono<ChatResponse> chat(ChatRequest request, String rawSessionId) {
+        ChatRequest resolved = normalized(request);
+        return guarded(resolved, () -> chatInternal(resolved, rawSessionId).flux()).single();
+    }
+
+    private Mono<ChatResponse> chatInternal(ChatRequest request, String rawSessionId) {
         return Mono.defer(() -> {
             if (isMock(request)) {
-                return router.route("mock").chat(request);
+                return observed(false, () -> router.route("mock").chat(request).flux()).single();
             }
 
             String sessionId = resolveSessionId(rawSessionId);
             ModelProvider provider = router.route(request.model());
 
-            return prepareRequest(request, sessionId).flatMap(provider::chat)
+            return prepareRequest(request, sessionId).flatMap(prepared -> observed(false, () -> provider.chat(prepared).flux()).single())
                     .flatMap(resp -> {
                         String content = resp.choices() != null &&
                                 !resp.choices().isEmpty() ? resp.choices().get(0).message().content() : "";

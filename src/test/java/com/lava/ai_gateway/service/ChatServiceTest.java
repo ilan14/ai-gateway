@@ -20,10 +20,13 @@ class ChatServiceTest {
     private final ModelRouter router = mock(ModelRouter.class);
     private final ModelProvider provider = mock(ModelProvider.class);
     private final SessionService sessions = mock(SessionService.class);
-    private final ChatService service = new ChatService(router, new ObjectMapper(), sessions);
+    private final ChatService service = new ChatService(router, new ObjectMapper(), sessions,
+            new com.lava.ai_gateway.protection.ModelProtection(mock(org.springframework.data.redis.core.StringRedisTemplate.class),
+                    new com.lava.ai_gateway.config.GatewayProperties(), new io.micrometer.core.instrument.simple.SimpleMeterRegistry()));
 
     @BeforeEach
     void setUp() {
+        when(router.resolveModel(any())).thenAnswer(call -> call.getArgument(0));
         when(router.route("stub")).thenReturn(provider);
     }
 
@@ -79,7 +82,8 @@ class ChatServiceTest {
 
         assertThatThrownBy(() -> service.chat(request(false), "8d404d66-22d4-45ea-a3b1-83a2b3a695a9").block(Duration.ofSeconds(5)))
                 .isInstanceOf(IllegalStateException.class).hasMessage("database unavailable");
-        verifyNoInteractions(provider);
+        verify(provider, never()).chat(any());
+        verify(provider, never()).streamChat(any());
         verify(sessions, never()).appendAssistantMessage(anyString(), anyString());
     }
 

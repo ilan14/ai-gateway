@@ -32,6 +32,12 @@ public class ModelRouter {
                 defaultModel, providers.stream().map(ModelProvider::name).toList());
     }
 
+    /** 统一缺省模型与兜底模型，保证请求、统计和保护使用相同标识。 */
+    public String resolveModel(String requestModel) {
+        String target = requestModel == null || requestModel.isBlank() ? defaultModel : requestModel;
+        return providers.stream().anyMatch(p -> p.supportsModel(target)) ? target : "stub";
+    }
+
     public ModelProvider route(String requestModel) {
         String target = (requestModel != null && !requestModel.isBlank())
                 ? requestModel
